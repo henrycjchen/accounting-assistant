@@ -5,45 +5,49 @@
 包含：生成凭证、调整税负率
 """
 
-import tkinter as tk
-from tkinter import ttk
-from tkinterdnd2 import TkinterDnD
+import wx
 
 # 导入模块
 from modules.voucher import VoucherTab
 from modules.tax_adjuster import TaxAdjustTab
 
 
-class AccountingAssistantApp:
+class AccountingAssistantApp(wx.Frame):
     """会计助手主应用"""
 
-    def __init__(self, root):
-        self.root = root
-        self.root.title("会计助手")
-        self.root.geometry("800x700")
-        self.root.resizable(True, True)
+    def __init__(self):
+        super().__init__(None, title="会计助手", size=(800, 700))
+        self.SetMinSize((600, 500))
 
         self.setup_ui()
+        self.Centre()
 
     def setup_ui(self):
         """设置主界面"""
+        # 创建主面板
+        panel = wx.Panel(self)
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
         # 创建 Notebook (tabs 容器)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.notebook = wx.Notebook(panel)
 
         # 创建 Tab 1: 生成凭证
         self.voucher_tab = VoucherTab(self.notebook)
-        self.notebook.add(self.voucher_tab, text="生成凭证")
+        self.notebook.AddPage(self.voucher_tab, "生成凭证")
 
         # 创建 Tab 2: 调整税负率
         self.tax_tab = TaxAdjustTab(self.notebook)
-        self.notebook.add(self.tax_tab, text="调整税负率")
+        self.notebook.AddPage(self.tax_tab, "调整税负率")
+
+        main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
+        panel.SetSizer(main_sizer)
 
 
 def main():
-    root = TkinterDnD.Tk()
-    app = AccountingAssistantApp(root)
-    root.mainloop()
+    app = wx.App()
+    frame = AccountingAssistantApp()
+    frame.Show()
+    app.MainLoop()
 
 
 if __name__ == '__main__':

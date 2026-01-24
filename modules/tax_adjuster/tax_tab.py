@@ -5,131 +5,148 @@
 """
 
 import os
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from tkinterdnd2 import DND_FILES
+import wx
 
 from .adjust_tax import TaxAdjuster
 
 
-class TaxAdjustTab(ttk.Frame):
+class FileDropTarget(wx.FileDropTarget):
+    """文件拖放目标"""
+
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def OnDropFiles(self, x, y, filenames):
+        if filenames:
+            self.callback(filenames[0])
+        return True
+
+
+class TaxAdjustTab(wx.Panel):
     """调整税负率 Tab"""
 
     def __init__(self, parent):
-        super().__init__(parent, padding="10")
+        super().__init__(parent)
 
         self.adjuster = None
         self.result = None
 
         # 文件路径（完整路径）
         self.excel_file_path = ""
-        # 显示用的文件名
-        self.file_display = tk.StringVar()
 
         self.setup_ui()
 
     def setup_ui(self):
         """设置界面"""
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
         # 标题
-        title_label = ttk.Label(
-            self,
-            text="调整税负率",
-            font=("Microsoft YaHei", 16, "bold")
-        )
-        title_label.pack(pady=(0, 20))
+        title_label = wx.StaticText(self, label="调整税负率")
+        title_font = title_label.GetFont()
+        title_font.SetPointSize(16)
+        title_font.SetWeight(wx.FONTWEIGHT_BOLD)
+        title_label.SetFont(title_font)
+        main_sizer.Add(title_label, 0, wx.ALL | wx.ALIGN_CENTER, 10)
 
         # === 文件选择区域 ===
-        file_frame = ttk.LabelFrame(self, text="选择文件", padding="10")
-        file_frame.pack(fill=tk.X, pady=(0, 10))
+        file_box = wx.StaticBox(self, label="选择文件")
+        file_sizer = wx.StaticBoxSizer(file_box, wx.VERTICAL)
 
         # 文件选择行
-        row_frame = ttk.Frame(file_frame)
-        row_frame.pack(fill=tk.X, pady=(0, 10))
+        row_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        label = ttk.Label(row_frame, text="测算表：", width=15)
-        label.pack(side=tk.LEFT)
+        label = wx.StaticText(file_box, label="测算表：", size=(100, -1))
+        row_sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
 
-        self.file_entry = ttk.Entry(row_frame, textvariable=self.file_display, width=40, state="readonly")
-        self.file_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self.file_entry = wx.TextCtrl(file_box, style=wx.TE_READONLY, size=(300, -1))
+        self.file_entry.SetDropTarget(FileDropTarget(self.on_drop))
+        row_sizer.Add(self.file_entry, 1, wx.EXPAND | wx.RIGHT, 10)
 
-        # 拖放文件支持
-        self.file_entry.drop_target_register(DND_FILES)
-        self.file_entry.dnd_bind('<<Drop>>', self.on_drop)
+        browse_btn = wx.Button(file_box, label="选择", size=(60, -1))
+        browse_btn.Bind(wx.EVT_BUTTON, self.browse_file)
+        row_sizer.Add(browse_btn, 0)
 
-        btn = ttk.Button(row_frame, text="选择", command=self.browse_file, width=8)
-        btn.pack(side=tk.LEFT)
+        file_sizer.Add(row_sizer, 0, wx.EXPAND | wx.ALL, 5)
+        main_sizer.Add(file_sizer, 0, wx.EXPAND | wx.ALL, 10)
 
         # === 参数设置区域 ===
-        param_frame = ttk.LabelFrame(self, text="参数设置", padding="10")
-        param_frame.pack(fill=tk.X, pady=(0, 10))
+        param_box = wx.StaticBox(self, label="参数设置")
+        param_sizer = wx.StaticBoxSizer(param_box, wx.HORIZONTAL)
 
-        ttk.Label(param_frame, text="目标税负率:").pack(side=tk.LEFT)
-        self.rate_var = tk.StringVar(value="0.00414")
-        rate_entry = ttk.Entry(param_frame, textvariable=self.rate_var, width=15)
-        rate_entry.pack(side=tk.LEFT, padx=(5, 10))
-        ttk.Label(param_frame, text="(例: 0.00414 = 0.414%)").pack(side=tk.LEFT)
+        param_label = wx.StaticText(param_box, label="目标税负率:")
+        param_sizer.Add(param_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        self.rate_entry = wx.TextCtrl(param_box, value="0.00414", size=(100, -1))
+        param_sizer.Add(self.rate_entry, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        hint_label = wx.StaticText(param_box, label="(例: 0.00414 = 0.414%)")
+        param_sizer.Add(hint_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
+
+        main_sizer.Add(param_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # === 操作按钮 ===
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, pady=(0, 10))
+        btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        ttk.Button(btn_frame, text="计算调整方案", command=self.calculate).pack(side=tk.LEFT)
-        ttk.Button(btn_frame, text="应用修改", command=self.apply_changes).pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Button(btn_frame, text="另存为...", command=self.save_as).pack(side=tk.LEFT, padx=(10, 0))
+        calc_btn = wx.Button(self, label="计算调整方案")
+        calc_btn.Bind(wx.EVT_BUTTON, self.calculate)
+        btn_sizer.Add(calc_btn, 0, wx.RIGHT, 10)
+
+        apply_btn = wx.Button(self, label="应用修改")
+        apply_btn.Bind(wx.EVT_BUTTON, self.apply_changes)
+        btn_sizer.Add(apply_btn, 0, wx.RIGHT, 10)
+
+        save_btn = wx.Button(self, label="另存为...")
+        save_btn.Bind(wx.EVT_BUTTON, self.save_as)
+        btn_sizer.Add(save_btn, 0)
+
+        main_sizer.Add(btn_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # === 结果显示区域 ===
-        result_frame = ttk.LabelFrame(self, text="计算结果", padding="10")
-        result_frame.pack(fill=tk.BOTH, expand=True)
+        result_box = wx.StaticBox(self, label="计算结果")
+        result_sizer = wx.StaticBoxSizer(result_box, wx.VERTICAL)
 
-        # 文本框 + 滚动条
-        text_frame = ttk.Frame(result_frame)
-        text_frame.pack(fill=tk.BOTH, expand=True)
-
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self.result_text = tk.Text(text_frame, wrap=tk.NONE, font=("Courier", 12), yscrollcommand=scrollbar.set)
-        self.result_text.pack(fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.result_text.yview)
-
-        # 横向滚动条
-        h_scrollbar = ttk.Scrollbar(result_frame, orient=tk.HORIZONTAL, command=self.result_text.xview)
-        h_scrollbar.pack(fill=tk.X)
-        self.result_text.config(xscrollcommand=h_scrollbar.set)
-
-    def on_drop(self, event):
-        """处理拖放文件"""
-        file_path = event.data
-        # 处理路径中可能包含的花括号
-        if file_path.startswith('{') and file_path.endswith('}'):
-            file_path = file_path[1:-1]
-        # 只取第一个文件
-        if ' ' in file_path and not os.path.exists(file_path):
-            file_path = file_path.split()[0]
-        # 保存完整路径，显示文件名
-        self.excel_file_path = file_path
-        self.file_display.set(os.path.basename(file_path))
-
-    def browse_file(self):
-        """选择文件"""
-        file_path = filedialog.askopenfilename(
-            title="选择Excel文件",
-            filetypes=[("Excel文件", "*.xlsx *.xls"), ("所有文件", "*.*")]
+        self.result_text = wx.TextCtrl(
+            result_box,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.VSCROLL
         )
-        if file_path:
-            self.excel_file_path = file_path
-            self.file_display.set(os.path.basename(file_path))
+        # 使用等宽字体
+        font = wx.Font(12, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
+        self.result_text.SetFont(font)
+        result_sizer.Add(self.result_text, 1, wx.EXPAND | wx.ALL, 5)
 
-    def calculate(self):
+        main_sizer.Add(result_sizer, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.SetSizer(main_sizer)
+
+    def on_drop(self, file_path):
+        """处理拖放文件"""
+        self.excel_file_path = file_path
+        self.file_entry.SetValue(os.path.basename(file_path))
+
+    def browse_file(self, event=None):
+        """选择文件"""
+        with wx.FileDialog(
+            self,
+            "选择Excel文件",
+            wildcard="Excel文件 (*.xlsx;*.xls)|*.xlsx;*.xls|所有文件 (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        ) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                file_path = dialog.GetPath()
+                self.excel_file_path = file_path
+                self.file_entry.SetValue(os.path.basename(file_path))
+
+    def calculate(self, event=None):
         file_path = self.excel_file_path
         if not file_path:
-            messagebox.showerror("错误", "请先选择Excel文件")
+            wx.MessageBox("请先选择Excel文件", "错误", wx.OK | wx.ICON_ERROR)
             return
 
         try:
-            rate = float(self.rate_var.get().strip())
+            rate = float(self.rate_entry.GetValue().strip())
         except ValueError:
-            messagebox.showerror("错误", "请输入有效的税负率")
+            wx.MessageBox("请输入有效的税负率", "错误", wx.OK | wx.ICON_ERROR)
             return
 
         try:
@@ -137,7 +154,7 @@ class TaxAdjustTab(ttk.Frame):
             self.result = self.adjuster.calculate_adjustment(rate)
             self.display_result()
         except Exception as e:
-            messagebox.showerror("错误", f"计算失败: {e}")
+            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
 
     def display_result(self):
         if not self.result:
@@ -147,7 +164,7 @@ class TaxAdjustTab(ttk.Frame):
         target = self.result['target']
         verify = self.result['verify']
 
-        self.result_text.delete(1.0, tk.END)
+        self.result_text.SetValue("")
 
         lines = []
         lines.append("=" * 60)
@@ -189,35 +206,43 @@ class TaxAdjustTab(ttk.Frame):
         lines.append(f"  税负率: {verify['rate']*100:.4f}%  {'OK' if rate_ok else 'FAIL'}")
         lines.append(f"  E31:    {verify['E31']:.2f}  {'OK' if e31_ok else 'FAIL'}")
 
-        self.result_text.insert(tk.END, "\n".join(lines))
+        self.result_text.SetValue("\n".join(lines))
 
-    def apply_changes(self):
+    def apply_changes(self, event=None):
         if not self.adjuster or not self.result:
-            messagebox.showerror("错误", "请先计算调整方案")
+            wx.MessageBox("请先计算调整方案", "错误", wx.OK | wx.ICON_ERROR)
             return
 
-        if messagebox.askyesno("确认", "确定要将修改应用到原文件吗？"):
+        dialog = wx.MessageDialog(
+            self,
+            "确定要将修改应用到原文件吗？",
+            "确认",
+            wx.YES_NO | wx.ICON_QUESTION
+        )
+        if dialog.ShowModal() == wx.ID_YES:
             try:
                 target = self.result['target']
                 save_path = self.adjuster.apply_adjustment(target['G25'], target['E18'])
-                messagebox.showinfo("成功", f"已保存至:\n{save_path}")
+                wx.MessageBox(f"已保存至:\n{save_path}", "成功", wx.OK | wx.ICON_INFORMATION)
             except Exception as e:
-                messagebox.showerror("错误", f"保存失败: {e}")
+                wx.MessageBox(f"保存失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
 
-    def save_as(self):
+    def save_as(self, event=None):
         if not self.adjuster or not self.result:
-            messagebox.showerror("错误", "请先计算调整方案")
+            wx.MessageBox("请先计算调整方案", "错误", wx.OK | wx.ICON_ERROR)
             return
 
-        filename = filedialog.asksaveasfilename(
-            title="另存为",
-            defaultextension=".xlsx",
-            filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")]
-        )
-        if filename:
-            try:
-                target = self.result['target']
-                save_path = self.adjuster.apply_adjustment(target['G25'], target['E18'], filename)
-                messagebox.showinfo("成功", f"已保存至:\n{save_path}")
-            except Exception as e:
-                messagebox.showerror("错误", f"保存失败: {e}")
+        with wx.FileDialog(
+            self,
+            "另存为",
+            wildcard="Excel文件 (*.xlsx)|*.xlsx|所有文件 (*.*)|*.*",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT
+        ) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                filename = dialog.GetPath()
+                try:
+                    target = self.result['target']
+                    save_path = self.adjuster.apply_adjustment(target['G25'], target['E18'], filename)
+                    wx.MessageBox(f"已保存至:\n{save_path}", "成功", wx.OK | wx.ICON_INFORMATION)
+                except Exception as e:
+                    wx.MessageBox(f"保存失败: {e}", "错误", wx.OK | wx.ICON_ERROR)

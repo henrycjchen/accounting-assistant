@@ -5,11 +5,9 @@
 """
 
 import os
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+import wx
 from datetime import datetime
 from openpyxl import Workbook
-from tkinterdnd2 import DND_FILES
 
 from .create_outbound import create_outbound
 from .create_inbound import create_inbound
@@ -17,171 +15,182 @@ from .create_issuing import create_issuing
 from .create_receiving import create_receiving
 
 
-class VoucherTab(ttk.Frame):
+class FileDropTarget(wx.FileDropTarget):
+    """文件拖放目标"""
+
+    def __init__(self, callback):
+        super().__init__()
+        self.callback = callback
+
+    def OnDropFiles(self, x, y, filenames):
+        if filenames:
+            self.callback(filenames[0])
+        return True
+
+
+class VoucherTab(wx.Panel):
     """生成凭证 Tab"""
 
     def __init__(self, parent):
-        super().__init__(parent, padding="10")
+        super().__init__(parent)
 
         # 文件路径（完整路径）
         self.outbound_invoices_path = ""
         self.calculate_path = ""
         self.inbound_invoices_path = ""
 
-        # 显示用的文件名
-        self.outbound_display = tk.StringVar()
-        self.calculate_display = tk.StringVar()
-        self.inbound_display = tk.StringVar()
+        # 显示用的输入框
+        self.outbound_entry = None
+        self.calculate_entry = None
+        self.inbound_entry = None
 
         self.setup_ui()
 
     def setup_ui(self):
         """设置界面"""
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
         # 标题
-        title_label = ttk.Label(
-            self,
-            text="生成凭证",
-            font=("Microsoft YaHei", 16, "bold")
-        )
-        title_label.pack(pady=(0, 20))
+        title_label = wx.StaticText(self, label="生成凭证")
+        title_font = title_label.GetFont()
+        title_font.SetPointSize(16)
+        title_font.SetWeight(wx.FONTWEIGHT_BOLD)
+        title_label.SetFont(title_font)
+        main_sizer.Add(title_label, 0, wx.ALL | wx.ALIGN_CENTER, 10)
 
         # 文件选择区域
-        files_frame = ttk.LabelFrame(self, text="选择文件", padding="10")
-        files_frame.pack(fill=tk.X, pady=(0, 20))
+        files_box = wx.StaticBox(self, label="选择文件")
+        files_sizer = wx.StaticBoxSizer(files_box, wx.VERTICAL)
 
         # 出库发票文件
-        self.create_file_row(
-            files_frame,
+        self.outbound_entry = self.create_file_row(
+            files_box,
+            files_sizer,
             "出库发票文件：",
-            self.outbound_display,
-            "outbound_invoices_path"
+            self.on_outbound_drop,
+            lambda: self.select_file("outbound_invoices_path", self.outbound_entry)
         )
 
         # 测算表文件
-        self.create_file_row(
-            files_frame,
+        self.calculate_entry = self.create_file_row(
+            files_box,
+            files_sizer,
             "测算表：",
-            self.calculate_display,
-            "calculate_path"
+            self.on_calculate_drop,
+            lambda: self.select_file("calculate_path", self.calculate_entry)
         )
 
         # 入库发票文件
-        self.create_file_row(
-            files_frame,
+        self.inbound_entry = self.create_file_row(
+            files_box,
+            files_sizer,
             "入库发票文件：",
-            self.inbound_display,
-            "inbound_invoices_path"
+            self.on_inbound_drop,
+            lambda: self.select_file("inbound_invoices_path", self.inbound_entry)
         )
+
+        main_sizer.Add(files_sizer, 0, wx.EXPAND | wx.ALL, 10)
 
         # 按钮区域
-        button_frame = ttk.Frame(self)
-        button_frame.pack(fill=tk.X, pady=(0, 20))
+        button_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        generate_btn = ttk.Button(
-            button_frame,
-            text="生成凭证",
-            command=self.generate_files,
-            width=20
-        )
-        generate_btn.pack(side=tk.LEFT, padx=(0, 10))
+        generate_btn = wx.Button(self, label="生成凭证", size=(120, -1))
+        generate_btn.Bind(wx.EVT_BUTTON, self.generate_files)
+        button_sizer.Add(generate_btn, 0, wx.RIGHT, 10)
 
-        clear_btn = ttk.Button(
-            button_frame,
-            text="清空",
-            command=self.clear_files,
-            width=10
-        )
-        clear_btn.pack(side=tk.LEFT)
+        clear_btn = wx.Button(self, label="清空", size=(80, -1))
+        clear_btn.Bind(wx.EVT_BUTTON, self.clear_files)
+        button_sizer.Add(clear_btn, 0)
+
+        main_sizer.Add(button_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # 状态区域
-        self.status_frame = ttk.LabelFrame(self, text="状态", padding="10")
-        self.status_frame.pack(fill=tk.BOTH, expand=True)
+        status_box = wx.StaticBox(self, label="状态")
+        status_sizer = wx.StaticBoxSizer(status_box, wx.VERTICAL)
 
-        self.status_text = tk.Text(
-            self.status_frame,
-            height=12,
-            state=tk.DISABLED,
-            wrap=tk.WORD
+        self.status_text = wx.TextCtrl(
+            status_box,
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL
         )
-        self.status_text.pack(fill=tk.BOTH, expand=True)
+        status_sizer.Add(self.status_text, 1, wx.EXPAND | wx.ALL, 5)
 
-    def create_file_row(self, parent, label_text, display_var, path_attr):
+        main_sizer.Add(status_sizer, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.SetSizer(main_sizer)
+
+    def create_file_row(self, parent, sizer, label_text, drop_callback, select_callback):
         """创建文件选择行"""
-        frame = ttk.Frame(parent)
-        frame.pack(fill=tk.X, pady=(0, 10))
+        row_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        label = ttk.Label(frame, text=label_text, width=15)
-        label.pack(side=tk.LEFT)
+        label = wx.StaticText(parent, label=label_text, size=(100, -1))
+        row_sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
 
-        entry = ttk.Entry(frame, textvariable=display_var, width=40, state="readonly")
-        entry.pack(side=tk.LEFT, padx=(0, 10))
+        entry = wx.TextCtrl(parent, style=wx.TE_READONLY, size=(300, -1))
+        entry.SetDropTarget(FileDropTarget(drop_callback))
+        row_sizer.Add(entry, 1, wx.EXPAND | wx.RIGHT, 10)
 
-        # 注册拖放支持
-        entry.drop_target_register(DND_FILES)
-        entry.dnd_bind('<<Drop>>', lambda e: self.on_drop(e, display_var, path_attr))
+        btn = wx.Button(parent, label="选择", size=(60, -1))
+        btn.Bind(wx.EVT_BUTTON, lambda e: select_callback())
+        row_sizer.Add(btn, 0)
 
-        btn = ttk.Button(
-            frame,
-            text="选择",
-            command=lambda: self.select_file(display_var, path_attr),
-            width=8
-        )
-        btn.pack(side=tk.LEFT)
+        sizer.Add(row_sizer, 0, wx.EXPAND | wx.ALL, 5)
 
-    def on_drop(self, event, display_var, path_attr):
-        """处理文件拖放"""
-        file_path = event.data
-        # 处理路径中可能包含的花括号
-        if file_path.startswith('{') and file_path.endswith('}'):
-            file_path = file_path[1:-1]
-        # 只取第一个文件
-        if ' ' in file_path and not os.path.exists(file_path):
-            file_path = file_path.split()[0]
-        # 保存完整路径，显示文件名
-        setattr(self, path_attr, file_path)
-        display_var.set(os.path.basename(file_path))
+        return entry
+
+    def on_outbound_drop(self, file_path):
+        """处理出库发票文件拖放"""
+        self.outbound_invoices_path = file_path
+        self.outbound_entry.SetValue(os.path.basename(file_path))
         self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
 
-    def select_file(self, display_var, path_attr):
-        """选择文件"""
-        file_path = filedialog.askopenfilename(
-            title="选择Excel文件",
-            filetypes=[
-                ("Excel文件", "*.xlsx *.xls"),
-                ("所有文件", "*.*")
-            ]
-        )
-        if file_path:
-            setattr(self, path_attr, file_path)
-            display_var.set(os.path.basename(file_path))
+    def on_calculate_drop(self, file_path):
+        """处理测算表文件拖放"""
+        self.calculate_path = file_path
+        self.calculate_entry.SetValue(os.path.basename(file_path))
+        self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
 
-    def clear_files(self):
+    def on_inbound_drop(self, file_path):
+        """处理入库发票文件拖放"""
+        self.inbound_invoices_path = file_path
+        self.inbound_entry.SetValue(os.path.basename(file_path))
+        self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
+
+    def select_file(self, path_attr, entry):
+        """选择文件"""
+        with wx.FileDialog(
+            self,
+            "选择Excel文件",
+            wildcard="Excel文件 (*.xlsx;*.xls)|*.xlsx;*.xls|所有文件 (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        ) as dialog:
+            if dialog.ShowModal() == wx.ID_OK:
+                file_path = dialog.GetPath()
+                setattr(self, path_attr, file_path)
+                entry.SetValue(os.path.basename(file_path))
+
+    def clear_files(self, event=None):
         """清空文件选择"""
         self.outbound_invoices_path = ""
         self.calculate_path = ""
         self.inbound_invoices_path = ""
-        self.outbound_display.set("")
-        self.calculate_display.set("")
-        self.inbound_display.set("")
+        self.outbound_entry.SetValue("")
+        self.calculate_entry.SetValue("")
+        self.inbound_entry.SetValue("")
         self.log_status("已清空文件选择")
 
     def log_status(self, message):
         """记录状态"""
-        self.status_text.config(state=tk.NORMAL)
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.status_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.status_text.see(tk.END)
-        self.status_text.config(state=tk.DISABLED)
-        self.update()
+        self.status_text.AppendText(f"[{timestamp}] {message}\n")
 
-    def generate_files(self):
+    def generate_files(self, event=None):
         """生成凭证文件"""
         outbound_path = self.outbound_invoices_path
         calculate_path = self.calculate_path
         inbound_path = self.inbound_invoices_path
 
         if not outbound_path:
-            messagebox.showerror("错误", "请选择出库发票文件")
+            wx.MessageBox("请选择出库发票文件", "错误", wx.OK | wx.ICON_ERROR)
             return
 
         try:
@@ -224,8 +233,8 @@ class VoucherTab(ttk.Frame):
             workbook.save(output_path)
 
             self.log_status(f"生成完成！文件已保存到：{output_path}")
-            messagebox.showinfo("成功", f"凭证文件已生成：\n{output_path}")
+            wx.MessageBox(f"凭证文件已生成：\n{output_path}", "成功", wx.OK | wx.ICON_INFORMATION)
 
         except Exception as e:
             self.log_status(f"生成失败：{str(e)}")
-            messagebox.showerror("错误", f"生成失败：{str(e)}")
+            wx.MessageBox(f"生成失败：{str(e)}", "错误", wx.OK | wx.ICON_ERROR)

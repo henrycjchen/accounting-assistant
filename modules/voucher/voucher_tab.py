@@ -6,6 +6,7 @@
 
 import os
 import wx
+import wx.grid as gridlib
 from datetime import datetime
 from openpyxl import Workbook
 
@@ -104,17 +105,47 @@ class VoucherTab(wx.Panel):
 
         main_sizer.Add(button_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        # 状态区域
-        status_box = wx.StaticBox(self, label="状态")
-        status_sizer = wx.StaticBoxSizer(status_box, wx.VERTICAL)
+        # 结果表格区域
+        result_box = wx.StaticBox(self, label="生成结果")
+        result_sizer = wx.StaticBoxSizer(result_box, wx.VERTICAL)
 
-        self.status_text = wx.TextCtrl(
-            status_box,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL
-        )
-        status_sizer.Add(self.status_text, 1, wx.EXPAND | wx.ALL, 5)
+        # 创建 Grid
+        self.result_grid = gridlib.Grid(result_box)
+        self.result_grid.CreateGrid(4, 3)
+        self.result_grid.EnableEditing(False)
+        self.result_grid.SetRowLabelSize(0)
+        self.result_grid.SetDefaultCellAlignment(wx.ALIGN_CENTER, wx.ALIGN_CENTER)
 
-        main_sizer.Add(status_sizer, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        # 设置列标题
+        self.result_grid.SetColLabelValue(0, "单据类型")
+        self.result_grid.SetColLabelValue(1, "数量")
+        self.result_grid.SetColLabelValue(2, "状态")
+
+        # 设置列宽
+        self.result_grid.SetColSize(0, 120)
+        self.result_grid.SetColSize(1, 80)
+        self.result_grid.SetColSize(2, 100)
+
+        # 设置行高
+        for i in range(4):
+            self.result_grid.SetRowSize(i, 28)
+
+        # 初始化数据
+        self.voucher_types = ["出库凭证", "入库凭证", "领料单", "收料单"]
+        for i, vtype in enumerate(self.voucher_types):
+            self.result_grid.SetCellValue(i, 0, vtype)
+            self.result_grid.SetCellValue(i, 1, "--")
+            self.result_grid.SetCellValue(i, 2, "等待")
+            self.result_grid.SetCellTextColour(i, 2, wx.Colour(150, 150, 150))
+
+        result_sizer.Add(self.result_grid, 0, wx.ALL | wx.ALIGN_CENTER_HORIZONTAL, 10)
+
+        # 状态信息
+        self.status_label = wx.StaticText(result_box, label="等待生成...")
+        self.status_label.SetForegroundColour(wx.Colour(128, 128, 128))
+        result_sizer.Add(self.status_label, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.BOTTOM, 10)
+
+        main_sizer.Add(result_sizer, 0, wx.ALIGN_CENTER_HORIZONTAL | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         self.SetSizer(main_sizer)
 
@@ -141,19 +172,19 @@ class VoucherTab(wx.Panel):
         """处理出库发票文件拖放"""
         self.outbound_invoices_path = file_path
         self.outbound_entry.SetValue(os.path.basename(file_path))
-        self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
+        self.set_status(f"已选择出库发票文件：{os.path.basename(file_path)}")
 
     def on_calculate_drop(self, file_path):
         """处理测算表文件拖放"""
         self.calculate_path = file_path
         self.calculate_entry.SetValue(os.path.basename(file_path))
-        self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
+        self.set_status(f"已选择测算表：{os.path.basename(file_path)}")
 
     def on_inbound_drop(self, file_path):
         """处理入库发票文件拖放"""
         self.inbound_invoices_path = file_path
         self.inbound_entry.SetValue(os.path.basename(file_path))
-        self.log_status(f"已拖入文件：{os.path.basename(file_path)}")
+        self.set_status(f"已选择入库发票文件：{os.path.basename(file_path)}")
 
     def select_file(self, path_attr, entry):
         """选择文件"""
@@ -176,12 +207,48 @@ class VoucherTab(wx.Panel):
         self.outbound_entry.SetValue("")
         self.calculate_entry.SetValue("")
         self.inbound_entry.SetValue("")
-        self.log_status("已清空文件选择")
+        self.reset_grid()
+        self.set_status("已清空文件选择")
 
-    def log_status(self, message):
-        """记录状态"""
+    def set_status(self, message, is_error=False):
+        """设置状态信息"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.status_text.AppendText(f"[{timestamp}] {message}\n")
+        self.status_label.SetLabel(f"[{timestamp}] {message}")
+        if is_error:
+            self.status_label.SetForegroundColour(wx.Colour(204, 0, 0))
+        else:
+            self.status_label.SetForegroundColour(wx.Colour(128, 128, 128))
+        self.status_label.Refresh()
+
+    def reset_grid(self):
+        """重置表格"""
+        for i in range(4):
+            self.result_grid.SetCellValue(i, 1, "--")
+            self.result_grid.SetCellValue(i, 2, "等待")
+            self.result_grid.SetCellTextColour(i, 2, wx.Colour(150, 150, 150))
+        self.result_grid.ForceRefresh()
+        self.set_status("等待生成...")
+
+    def update_grid_row(self, row, count=None, status="等待"):
+        """更新表格行"""
+        if count is not None:
+            self.result_grid.SetCellValue(row, 1, str(count))
+        elif status == "处理中":
+            self.result_grid.SetCellValue(row, 1, "...")
+
+        self.result_grid.SetCellValue(row, 2, status)
+
+        # 设置状态颜色
+        if status == "等待":
+            self.result_grid.SetCellTextColour(row, 2, wx.Colour(150, 150, 150))
+        elif status == "处理中":
+            self.result_grid.SetCellTextColour(row, 2, wx.Colour(66, 133, 244))
+        elif status == "完成":
+            self.result_grid.SetCellTextColour(row, 2, wx.Colour(52, 168, 83))
+        elif status == "错误":
+            self.result_grid.SetCellTextColour(row, 2, wx.Colour(234, 67, 53))
+
+        self.result_grid.ForceRefresh()
 
     def generate_files(self, event=None):
         """生成凭证文件"""
@@ -193,8 +260,15 @@ class VoucherTab(wx.Panel):
             wx.MessageBox("请选择出库发票文件", "错误", wx.OK | wx.ICON_ERROR)
             return
 
+        # 统计数量
+        counts = [0, 0, 0, 0]
+        current_row = 0
+
         try:
-            self.log_status("开始生成凭证...")
+            # 重置表格状态
+            self.reset_grid()
+            self.set_status("开始生成凭证...")
+            wx.GetApp().Yield()
 
             # 创建工作簿
             workbook = Workbook()
@@ -206,35 +280,63 @@ class VoucherTab(wx.Panel):
             output_filename = f"会计助手-{datetime.now().strftime('%Y%m')}.xlsx"
 
             # 生成出库凭证
-            self.log_status("正在生成出库凭证...")
+            current_row = 0
+            self.update_grid_row(0, status="处理中")
+            self.set_status("正在生成出库凭证...")
+            wx.GetApp().Yield()
+
             outbound = create_outbound(workbook, outbound_path)
+            counts[0] = len(outbound) if outbound else 0
+            self.update_grid_row(0, counts[0], "完成")
 
             if calculate_path:
                 output_dir = os.path.dirname(calculate_path)
 
                 # 生成入库凭证
-                self.log_status("正在生成入库凭证...")
+                current_row = 1
+                self.update_grid_row(1, status="处理中")
+                self.set_status("正在生成入库凭证...")
+                wx.GetApp().Yield()
+
                 inbound = create_inbound(workbook, calculate_path, outbound)
+                counts[1] = len(inbound) if inbound else 0
+                self.update_grid_row(1, counts[1], "完成")
 
                 # 生成领料单
-                self.log_status("正在生成领料单...")
+                current_row = 2
+                self.update_grid_row(2, status="处理中")
+                self.set_status("正在生成领料单...")
+                wx.GetApp().Yield()
+
                 issuing = create_issuing(workbook, calculate_path, inbound)
+                counts[2] = len(issuing) if issuing else 0
+                self.update_grid_row(2, counts[2], "完成")
 
                 if inbound_path:
                     # 生成收料单
-                    self.log_status("正在生成收料单...")
-                    create_receiving(workbook, inbound_path, issuing)
+                    current_row = 3
+                    self.update_grid_row(3, status="处理中")
+                    self.set_status("正在生成收料单...")
+                    wx.GetApp().Yield()
+
+                    receiving = create_receiving(workbook, inbound_path, issuing)
+                    counts[3] = len(receiving) if receiving else 0
+                    self.update_grid_row(3, counts[3], "完成")
 
             # 保存文件
             output_path = os.path.join(output_dir, output_filename)
-            # 如果文件已存在，先删除
             if os.path.exists(output_path):
                 os.remove(output_path)
             workbook.save(output_path)
 
-            self.log_status(f"生成完成！文件已保存到：{output_path}")
+            # 计算总数
+            total = sum(counts)
+            self.set_status(f"生成完成！共 {total} 张单据，已保存到 {os.path.basename(output_path)}")
+
             wx.MessageBox(f"凭证文件已生成：\n{output_path}", "成功", wx.OK | wx.ICON_INFORMATION)
 
         except Exception as e:
-            self.log_status(f"生成失败：{str(e)}")
+            # 将当前处理中的行设为错误状态
+            self.update_grid_row(current_row, status="错误")
+            self.set_status(f"生成失败：{str(e)}", is_error=True)
             wx.MessageBox(f"生成失败：{str(e)}", "错误", wx.OK | wx.ICON_ERROR)

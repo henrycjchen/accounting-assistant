@@ -5,7 +5,9 @@
 """
 
 import os
+import threading
 import wx
+import wx.grid
 
 from .adjust_tax import TaxAdjuster
 
@@ -72,36 +74,103 @@ class TaxAdjustTab(wx.Panel):
         # === 操作按钮 ===
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        btn1 = wx.Button(self, label="调整年利润")
-        btn1.Bind(wx.EVT_BUTTON, self.adjust_annual_profit)
+        btn1 = wx.Button(self, label="调整年利润与月毛利")
+        btn1.Bind(wx.EVT_BUTTON, self.adjust_combined)
         btn_sizer.Add(btn1, 0, wx.RIGHT, 10)
 
-        btn2 = wx.Button(self, label="调整月毛利")
-        btn2.Bind(wx.EVT_BUTTON, self.adjust_monthly_profit)
-        btn_sizer.Add(btn2, 0, wx.RIGHT, 10)
-
-        btn3 = wx.Button(self, label="调整库存毛利率")
-        btn3.Bind(wx.EVT_BUTTON, self.adjust_inventory_margin)
-        btn_sizer.Add(btn3, 0)
+        btn2 = wx.Button(self, label="调整库存毛利率")
+        btn2.Bind(wx.EVT_BUTTON, self.adjust_inventory_margin)
+        btn_sizer.Add(btn2, 0)
 
         main_sizer.Add(btn_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # === 进度显示区域 ===
+        progress_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.progress_gauge = wx.Gauge(self, range=100, size=(300, 20))
+        progress_sizer.Add(self.progress_gauge, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        self.progress_label = wx.StaticText(self, label="")
+        progress_sizer.Add(self.progress_label, 1, wx.ALIGN_CENTER_VERTICAL)
+
+        main_sizer.Add(progress_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # 初始隐藏进度条
+        self.progress_gauge.Hide()
+        self.progress_label.Hide()
+
         # === 结果显示区域 ===
-        result_box = wx.StaticBox(self, label="计算结果")
-        result_sizer = wx.StaticBoxSizer(result_box, wx.VERTICAL)
+        result_panel = wx.Panel(self)
+        result_sizer = wx.BoxSizer(wx.VERTICAL)
 
-        self.result_text = wx.TextCtrl(
-            result_box,
-            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.HSCROLL | wx.VSCROLL
-        )
-        # 使用等宽字体
-        font = wx.Font(12, wx.FONTFAMILY_TELETYPE, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_NORMAL)
-        self.result_text.SetFont(font)
-        result_sizer.Add(self.result_text, 1, wx.EXPAND | wx.ALL, 5)
+        # 建议调整卡片
+        self.suggest_box = wx.StaticBox(result_panel, label="建议调整")
+        suggest_sizer = wx.StaticBoxSizer(self.suggest_box, wx.VERTICAL)
+        self.suggest_grid = self._create_grid(self.suggest_box, rows=2, cols=2)
+        suggest_sizer.Add(self.suggest_grid, 0, wx.ALL, 5)
+        result_sizer.Add(suggest_sizer, 0, wx.LEFT | wx.BOTTOM, 0)
 
-        main_sizer.Add(result_sizer, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        # 验证结果卡片
+        self.verify_box = wx.StaticBox(result_panel, label="验证结果")
+        verify_sizer = wx.StaticBoxSizer(self.verify_box, wx.VERTICAL)
+        self.verify_grid = self._create_grid(self.verify_box, rows=5, cols=4)
+        verify_sizer.Add(self.verify_grid, 0, wx.ALL, 5)
+        result_sizer.Add(verify_sizer, 0, wx.LEFT | wx.BOTTOM, 0)
+
+        # 状态卡片
+        self.status_box = wx.StaticBox(result_panel, label="状态")
+        status_sizer = wx.StaticBoxSizer(self.status_box, wx.VERTICAL)
+        self.status_grid = self._create_grid(self.status_box, rows=1, cols=4)
+        status_sizer.Add(self.status_grid, 0, wx.ALL, 5)
+        result_sizer.Add(status_sizer, 0, wx.LEFT, 0)
+
+        result_panel.SetSizer(result_sizer)
+        main_sizer.Add(result_panel, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # 初始化时隐藏结果区域
+        self.suggest_box.Hide()
+        self.verify_box.Hide()
+        self.status_box.Hide()
 
         self.SetSizer(main_sizer)
+
+    def _create_grid(self, parent, rows, cols):
+        """创建 Grid 控件"""
+        grid = wx.grid.Grid(parent)
+        grid.CreateGrid(rows, cols)
+        grid.EnableEditing(False)
+        grid.EnableGridLines(True)
+        grid.SetRowLabelSize(0)
+        grid.SetColLabelSize(0)
+        grid.SetDefaultCellAlignment(wx.ALIGN_LEFT, wx.ALIGN_CENTER)
+        grid.SetDefaultRenderer(wx.grid.GridCellStringRenderer())
+        # 禁用滚动条
+        grid.ShowScrollbars(wx.SHOW_SB_NEVER, wx.SHOW_SB_NEVER)
+        return grid
+
+    def _auto_size_grid(self, grid):
+        """自动调整 Grid 大小"""
+        grid.AutoSizeColumns()
+        grid.AutoSizeRows()
+        # 计算总高度和宽度
+        total_height = sum(grid.GetRowSize(i) for i in range(grid.GetNumberRows()))
+        total_width = sum(grid.GetColSize(i) for i in range(grid.GetNumberCols()))
+        # 设置精确尺寸，无多余空白
+        grid.SetSize((total_width + 2, total_height + 2))
+        grid.SetMinSize((total_width + 2, total_height + 2))
+        grid.SetMaxSize((total_width + 2, total_height + 2))
+
+    def _set_cell(self, grid, row, col, value, bold=False, color=None, align_right=False):
+        """设置单元格值和样式"""
+        grid.SetCellValue(row, col, value)
+        if bold:
+            font = grid.GetCellFont(row, col)
+            font.SetWeight(wx.FONTWEIGHT_BOLD)
+            grid.SetCellFont(row, col, font)
+        if color:
+            grid.SetCellTextColour(row, col, color)
+        if align_right:
+            grid.SetCellAlignment(row, col, wx.ALIGN_RIGHT, wx.ALIGN_CENTER)
 
     def on_drop(self, file_path):
         """处理拖放文件"""
@@ -131,39 +200,72 @@ class TaxAdjustTab(wx.Panel):
     def _load_adjuster(self):
         """加载调整器"""
         try:
-            self.adjuster = TaxAdjuster(self.excel_file_path)
+            self.adjuster = TaxAdjuster(self.excel_file_path, progress_callback=self._on_progress)
             return True
         except Exception as e:
             wx.MessageBox(f"加载文件失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
             return False
 
-    def adjust_annual_profit(self, event=None):
-        """处理"调整年利润"按钮点击"""
+    def _on_progress(self, progress, message):
+        """进度回调（从工作线程调用）"""
+        wx.CallAfter(self._update_progress, progress, message)
+
+    def _update_progress(self, progress, message):
+        """更新进度显示（在主线程中）"""
+        self.progress_gauge.SetValue(progress)
+        self.progress_label.SetLabel(message)
+
+    def _show_progress(self):
+        """显示进度条"""
+        self.progress_gauge.SetValue(0)
+        self.progress_label.SetLabel("准备中...")
+        self.progress_gauge.Show()
+        self.progress_label.Show()
+        self.Layout()
+
+    def _hide_progress(self):
+        """隐藏进度条"""
+        self.progress_gauge.Hide()
+        self.progress_label.Hide()
+        self.Layout()
+
+    def _set_buttons_enabled(self, enabled):
+        """启用/禁用按钮"""
+        for child in self.GetChildren():
+            if isinstance(child, wx.Button):
+                child.Enable(enabled)
+
+    def adjust_combined(self, event=None):
+        """处理"调整年利润与月毛利"按钮点击"""
         if not self._ensure_file_selected():
             return
 
         if not self._load_adjuster():
             return
 
-        try:
-            result = self.adjuster.calculate_annual_profit_adjustment()
-            self.display_annual_profit_result(result)
-        except Exception as e:
-            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+        # 显示进度条，禁用按钮
+        self._show_progress()
+        self._set_buttons_enabled(False)
 
-    def adjust_monthly_profit(self, event=None):
-        """处理"调整月毛利"按钮点击"""
-        if not self._ensure_file_selected():
-            return
+        def do_calculate():
+            try:
+                result = self.adjuster.calculate_combined_adjustment()
+                wx.CallAfter(self._on_combined_complete, result, None)
+            except Exception as e:
+                wx.CallAfter(self._on_combined_complete, None, e)
 
-        if not self._load_adjuster():
-            return
+        thread = threading.Thread(target=do_calculate, daemon=True)
+        thread.start()
 
-        try:
-            result = self.adjuster.calculate_monthly_profit_adjustment()
-            self.display_monthly_profit_result(result)
-        except Exception as e:
-            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+    def _on_combined_complete(self, result, error):
+        """处理计算完成（在主线程中）"""
+        self._hide_progress()
+        self._set_buttons_enabled(True)
+
+        if error:
+            wx.MessageBox(f"计算失败: {error}", "错误", wx.OK | wx.ICON_ERROR)
+        else:
+            self.display_combined_result(result)
 
     def adjust_inventory_margin(self, event=None):
         """处理"调整库存毛利率"按钮点击"""
@@ -173,128 +275,177 @@ class TaxAdjustTab(wx.Panel):
         if not self._load_adjuster():
             return
 
-        try:
-            result = self.adjuster.calculate_inventory_margin_adjustment()
+        # 显示进度条，禁用按钮
+        self._show_progress()
+        self._set_buttons_enabled(False)
+
+        def do_calculate():
+            try:
+                result = self.adjuster.calculate_inventory_margin_adjustment()
+                wx.CallAfter(self._on_inventory_margin_complete, result, None)
+            except Exception as e:
+                wx.CallAfter(self._on_inventory_margin_complete, None, e)
+
+        thread = threading.Thread(target=do_calculate, daemon=True)
+        thread.start()
+
+    def _on_inventory_margin_complete(self, result, error):
+        """处理计算完成（在主线程中）"""
+        self._hide_progress()
+        self._set_buttons_enabled(True)
+
+        if error:
+            wx.MessageBox(f"计算失败: {error}", "错误", wx.OK | wx.ICON_ERROR)
+        else:
             self.display_inventory_margin_result(result)
-        except Exception as e:
-            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
 
-    def display_annual_profit_result(self, result):
-        """显示年利润调整结果"""
+    def _clear_grid(self, grid):
+        """清空 Grid 内容"""
+        grid.ClearGrid()
+
+    def display_combined_result(self, result):
+        """显示整合调整结果（年利润 + 月毛利）"""
         current = result['current']
         target = result['target']
         verify = result['verify']
-        constant = result['constant']
 
-        lines = []
-        lines.append("=" * 60)
-        lines.append(" 调整年利润 - 目标: G22 = 0.00")
-        lines.append("=" * 60)
-        lines.append("")
+        # 显示卡片
+        self.suggest_box.Show()
+        self.verify_box.Show()
+        self.status_box.Show()
 
-        lines.append("【当前值】")
-        lines.append(f"  E17 (年收入):     {current['E17']:,.2f}")
-        lines.append(f"  E18 (年利润总额): {current['E18']:,.2f}")
-        lines.append(f"  E21 (年应纳税额): {current['E21']:,.2f}")
-        lines.append(f"  E22 (E21/2):      {current['E22']:,.2f}")
-        lines.append(f"  G22 (目标单元格): {current['G22']:,.2f}")
-        lines.append(f"  税负率常量:       {constant:.5f}")
-        lines.append("")
+        # === 建议调整卡片 ===
+        self._clear_grid(self.suggest_grid)
+        self._set_cell(self.suggest_grid, 0, 0, "E18 (年利润总额):", bold=True)
+        self._set_cell(self.suggest_grid, 0, 1, f"{target['E18']:,.2f}", color=wx.Colour(0, 100, 180), align_right=True)
+        self._set_cell(self.suggest_grid, 1, 0, "G25 (成本系数):", bold=True)
+        self._set_cell(self.suggest_grid, 1, 1, f"{target['G25']:.9f}", color=wx.Colour(0, 100, 180), align_right=True)
+        self._auto_size_grid(self.suggest_grid)
 
-        lines.append("【建议调整】")
-        lines.append(f"  E18 应改为: {target['E18']:,.2f}")
-        lines.append("")
+        # === 验证结果卡片 ===
+        self._clear_grid(self.verify_grid)
+        # 表头
+        self._set_cell(self.verify_grid, 0, 0, "项目", bold=True)
+        self._set_cell(self.verify_grid, 0, 1, "当前值", bold=True)
+        self._set_cell(self.verify_grid, 0, 2, "调整范围", bold=True)
+        self._set_cell(self.verify_grid, 0, 3, "调整值", bold=True)
 
-        lines.append("【验证结果】")
-        lines.append(f"  调整后 E21: {verify['E21']:,.2f}")
-        lines.append(f"  调整后 E22: {verify['E22']:,.2f}")
-        lines.append(f"  调整后 G22: {verify['G22']:,.4f}")
+        # E18
+        self._set_cell(self.verify_grid, 1, 0, "E18 (年利润总额)")
+        self._set_cell(self.verify_grid, 1, 1, f"{current['E18']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 1, 2, f"{TaxAdjuster.E18_MIN:,} ~ {TaxAdjuster.E18_MAX:,}", align_right=True)
+        self._set_cell(self.verify_grid, 1, 3, f"{target['E18']:,.2f}", align_right=True)
 
+        # G25
+        self._set_cell(self.verify_grid, 2, 0, "G25 (成本系数)")
+        self._set_cell(self.verify_grid, 2, 1, f"{current['G25']:.6f}", align_right=True)
+        self._set_cell(self.verify_grid, 2, 2, f"{TaxAdjuster.G25_MIN:.2f} ~ {TaxAdjuster.G25_MAX:.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 2, 3, f"{target['G25']:.6f}", align_right=True)
+
+        # G22
         g22_ok = abs(verify['G22']) < 0.009
-        lines.append(f"  状态: {'OK' if g22_ok else 'FAIL'}")
+        self._set_cell(self.verify_grid, 3, 0, "G22 (税负差异)")
+        self._set_cell(self.verify_grid, 3, 1, f"{current['G22']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 3, 2, "-0.009 ~ 0.009", align_right=True)
+        self._set_cell(self.verify_grid, 3, 3, f"{verify['G22']:.4f}",
+                       color=wx.Colour(0, 128, 0) if g22_ok else wx.Colour(200, 0, 0), align_right=True)
 
-        self.result_text.SetValue("\n".join(lines))
-
-    def display_monthly_profit_result(self, result):
-        """显示月毛利调整结果"""
-        current = result['current']
-        target = result['target']
-        verify = result['verify']
-        prev_profit = result['prev_profit']
-
-        lines = []
-        lines.append("=" * 60)
-        lines.append(" 调整月毛利 - 目标: E31 = 0.00")
-        lines.append("=" * 60)
-        lines.append("")
-
-        lines.append("【当前值】")
-        lines.append(f"  G25 (成本系数):   {current['G25']:.9f}")
-        lines.append(f"  B47 (利润总额):   {current['B47']:,.2f}")
-        lines.append(f"  E29 (年利润总额): {current['E29']:,.2f}")
-        lines.append(f"  E30 (累计利润):   {current['E30']:,.2f}")
-        lines.append(f"  E31 (目标单元格): {current['E31']:,.2f}")
-        lines.append(f"  J12 (销售成本):   {current['J12']:,.2f}")
-        lines.append(f"  上期累计利润:     {prev_profit:,.2f}")
-        lines.append("")
-
-        lines.append("【建议调整】")
-        lines.append(f"  G25 应改为: {target['G25']:.9f}")
-        lines.append(f"  (目标B47:   {target['B47']:,.2f})")
-        lines.append("")
-
-        lines.append("【验证结果】")
-        lines.append(f"  调整后 B47: {verify['B47']:,.2f}")
-        lines.append(f"  调整后 E30: {verify['E30']:,.2f}")
-        lines.append(f"  调整后 E31: {verify['E31']:,.4f}")
-        lines.append(f"  调整后 J12: {verify['J12']:,.2f}")
-
+        # E31
         e31_ok = abs(verify['E31']) < 0.009
-        lines.append(f"  状态: {'OK' if e31_ok else 'FAIL'}")
+        self._set_cell(self.verify_grid, 4, 0, "E31 (利润差异)")
+        self._set_cell(self.verify_grid, 4, 1, f"{current['E31']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 4, 2, "-0.009 ~ 0.009", align_right=True)
+        self._set_cell(self.verify_grid, 4, 3, f"{verify['E31']:.4f}",
+                       color=wx.Colour(0, 128, 0) if e31_ok else wx.Colour(200, 0, 0), align_right=True)
+        self._auto_size_grid(self.verify_grid)
 
-        self.result_text.SetValue("\n".join(lines))
+        # === 状态卡片 ===
+        self._clear_grid(self.status_grid)
+        self._set_cell(self.status_grid, 0, 0, "G22:", bold=True)
+        self._set_cell(self.status_grid, 0, 1, "OK" if g22_ok else "FAIL",
+                       color=wx.Colour(0, 128, 0) if g22_ok else wx.Colour(200, 0, 0))
+        self._set_cell(self.status_grid, 0, 2, "E31:", bold=True)
+        self._set_cell(self.status_grid, 0, 3, "OK" if e31_ok else "FAIL",
+                       color=wx.Colour(0, 128, 0) if e31_ok else wx.Colour(200, 0, 0))
+        self._auto_size_grid(self.status_grid)
+
+        self.Layout()
 
     def display_inventory_margin_result(self, result):
         """显示库存毛利率调整结果"""
         if 'error' in result:
-            lines = []
-            lines.append("=" * 60)
-            lines.append(" 调整库存毛利率 - 错误")
-            lines.append("=" * 60)
-            lines.append("")
-            lines.append(f"  {result['error']}")
-            self.result_text.SetValue("\n".join(lines))
+            self.suggest_box.Show()
+            self.verify_box.Hide()
+            self.status_box.Hide()
+            self._clear_grid(self.suggest_grid)
+            self._set_cell(self.suggest_grid, 0, 0, "错误:", bold=True, color=wx.Colour(200, 0, 0))
+            self._set_cell(self.suggest_grid, 0, 1, result['error'], color=wx.Colour(200, 0, 0))
+            self._auto_size_grid(self.suggest_grid)
+            self.Layout()
             return
 
         current = result['current']
         target = result['target']
         verify = result['verify']
 
-        lines = []
-        lines.append("=" * 60)
-        lines.append(" 调整库存毛利率 - 目标: H11 = 0, F20 = 0")
-        lines.append("=" * 60)
-        lines.append("")
+        # 显示卡片
+        self.suggest_box.Show()
+        self.verify_box.Show()
+        self.status_box.Show()
 
-        lines.append("【当前值】")
-        lines.append(f"  毛利率 (E14除数): {current['margin']:.4f}")
-        lines.append(f"  H11 (目标1):      {current['H11']:,.2f}")
-        lines.append(f"  B11 (加工费):     {current['B11']:,.2f}")
-        lines.append(f"  F20 (目标2):      {current['F20']:,.2f}")
-        lines.append("")
+        # === 建议调整卡片 ===
+        self._clear_grid(self.suggest_grid)
+        self._set_cell(self.suggest_grid, 0, 0, "毛利率 (E14除数):", bold=True)
+        self._set_cell(self.suggest_grid, 0, 1, f"{target['margin']:.5f}", color=wx.Colour(0, 100, 180), align_right=True)
+        self._set_cell(self.suggest_grid, 1, 0, "B11 (产品成本加工费):", bold=True)
+        self._set_cell(self.suggest_grid, 1, 1, f"{target['B11']:,.2f}", color=wx.Colour(0, 100, 180), align_right=True)
+        self._auto_size_grid(self.suggest_grid)
 
-        lines.append("【建议调整】")
-        lines.append(f"  毛利率应改为: {target['margin']:.4f}")
-        lines.append(f"  B11 应改为:   {target['B11']:,.2f}")
-        lines.append("")
+        # === 验证结果卡片 ===
+        self._clear_grid(self.verify_grid)
+        # 表头
+        self._set_cell(self.verify_grid, 0, 0, "项目", bold=True)
+        self._set_cell(self.verify_grid, 0, 1, "当前值", bold=True)
+        self._set_cell(self.verify_grid, 0, 2, "调整范围", bold=True)
+        self._set_cell(self.verify_grid, 0, 3, "调整值", bold=True)
 
-        lines.append("【验证结果】")
-        lines.append(f"  调整后 H11: {verify['H11']:,.2f}")
-        lines.append(f"  调整后 F20: {verify['F20']:,.2f}")
+        # 毛利率
+        self._set_cell(self.verify_grid, 1, 0, "毛利率")
+        self._set_cell(self.verify_grid, 1, 1, f"{current['margin']:.5f}", align_right=True)
+        self._set_cell(self.verify_grid, 1, 2, f"{TaxAdjuster.MARGIN_MIN:.2f} ~ {TaxAdjuster.MARGIN_MAX:.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 1, 3, f"{target['margin']:.5f}", align_right=True)
 
+        # B11
+        self._set_cell(self.verify_grid, 2, 0, "B11 (加工费)")
+        self._set_cell(self.verify_grid, 2, 1, f"{current['B11']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 2, 2, f"{TaxAdjuster.B11_MIN:,} ~ {TaxAdjuster.B11_MAX:,}", align_right=True)
+        self._set_cell(self.verify_grid, 2, 3, f"{target['B11']:,.2f}", align_right=True)
+
+        # H11
         h11_ok = abs(verify['H11']) < 5.0
-        f20_ok = abs(verify['F20']) < 20000.0
-        lines.append(f"  H11 状态: {'OK' if h11_ok else 'FAIL'} (容差 ±5.0)")
-        lines.append(f"  F20 状态: {'OK' if f20_ok else 'FAIL'} (容差 ±20000.0)")
+        self._set_cell(self.verify_grid, 3, 0, "H11")
+        self._set_cell(self.verify_grid, 3, 1, f"{current['H11']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 3, 2, f"{TaxAdjuster.H11_MIN:.0f} ~ {TaxAdjuster.H11_MAX:.0f}", align_right=True)
+        self._set_cell(self.verify_grid, 3, 3, f"{verify['H11']:,.2f}",
+                       color=wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0), align_right=True)
 
-        self.result_text.SetValue("\n".join(lines))
+        # F20
+        f20_ok = abs(verify['F20']) < 20000.0
+        self._set_cell(self.verify_grid, 4, 0, "F20")
+        self._set_cell(self.verify_grid, 4, 1, f"{current['F20']:,.2f}", align_right=True)
+        self._set_cell(self.verify_grid, 4, 2, f"{TaxAdjuster.F20_MIN:,} ~ {TaxAdjuster.F20_MAX:,}", align_right=True)
+        self._set_cell(self.verify_grid, 4, 3, f"{verify['F20']:,.2f}",
+                       color=wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0), align_right=True)
+        self._auto_size_grid(self.verify_grid)
+
+        # === 状态卡片 ===
+        self._clear_grid(self.status_grid)
+        self._set_cell(self.status_grid, 0, 0, "H11:", bold=True)
+        self._set_cell(self.status_grid, 0, 1, "OK" if h11_ok else "FAIL",
+                       color=wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0))
+        self._set_cell(self.status_grid, 0, 2, "F20:", bold=True)
+        self._set_cell(self.status_grid, 0, 3, "OK" if f20_ok else "FAIL",
+                       color=wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0))
+        self._auto_size_grid(self.status_grid)
+
+        self.Layout()

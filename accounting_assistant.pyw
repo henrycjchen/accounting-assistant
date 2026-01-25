@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 会计助手 - 整合版
-包含：生成凭证、调整税负率
+包含：生成凭证、调整测算表
 """
 
 import wx
@@ -35,9 +35,9 @@ class AccountingAssistantApp(wx.Frame):
         self.voucher_tab = VoucherTab(self.notebook)
         self.notebook.AddPage(self.voucher_tab, "生成凭证")
 
-        # 创建 Tab 2: 调整税负率
+        # 创建 Tab 2: 调整测算表
         self.tax_tab = TaxAdjustTab(self.notebook)
-        self.notebook.AddPage(self.tax_tab, "调整税负率")
+        self.notebook.AddPage(self.tax_tab, "调整测算表")
 
         main_sizer.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 5)
         panel.SetSizer(main_sizer)

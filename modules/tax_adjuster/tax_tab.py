@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-调整税负率 Tab
+调整测算表 Tab
 """
 
 import os
@@ -24,13 +24,12 @@ class FileDropTarget(wx.FileDropTarget):
 
 
 class TaxAdjustTab(wx.Panel):
-    """调整税负率 Tab"""
+    """调整测算表 Tab"""
 
     def __init__(self, parent):
         super().__init__(parent)
 
         self.adjuster = None
-        self.result = None
 
         # 文件路径（完整路径）
         self.excel_file_path = ""
@@ -42,7 +41,7 @@ class TaxAdjustTab(wx.Panel):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
         # 标题
-        title_label = wx.StaticText(self, label="调整税负率")
+        title_label = wx.StaticText(self, label="调整测算表")
         title_font = title_label.GetFont()
         title_font.SetPointSize(16)
         title_font.SetWeight(wx.FONTWEIGHT_BOLD)
@@ -70,35 +69,20 @@ class TaxAdjustTab(wx.Panel):
         file_sizer.Add(row_sizer, 0, wx.EXPAND | wx.ALL, 5)
         main_sizer.Add(file_sizer, 0, wx.EXPAND | wx.ALL, 10)
 
-        # === 参数设置区域 ===
-        param_box = wx.StaticBox(self, label="参数设置")
-        param_sizer = wx.StaticBoxSizer(param_box, wx.HORIZONTAL)
-
-        param_label = wx.StaticText(param_box, label="目标税负率:")
-        param_sizer.Add(param_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        self.rate_entry = wx.TextCtrl(param_box, value="0.00414", size=(100, -1))
-        param_sizer.Add(self.rate_entry, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        hint_label = wx.StaticText(param_box, label="(例: 0.00414 = 0.414%)")
-        param_sizer.Add(hint_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)
-
-        main_sizer.Add(param_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
         # === 操作按钮 ===
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
-        calc_btn = wx.Button(self, label="计算调整方案")
-        calc_btn.Bind(wx.EVT_BUTTON, self.calculate)
-        btn_sizer.Add(calc_btn, 0, wx.RIGHT, 10)
+        btn1 = wx.Button(self, label="调整年利润")
+        btn1.Bind(wx.EVT_BUTTON, self.adjust_annual_profit)
+        btn_sizer.Add(btn1, 0, wx.RIGHT, 10)
 
-        apply_btn = wx.Button(self, label="应用修改")
-        apply_btn.Bind(wx.EVT_BUTTON, self.apply_changes)
-        btn_sizer.Add(apply_btn, 0, wx.RIGHT, 10)
+        btn2 = wx.Button(self, label="调整月毛利")
+        btn2.Bind(wx.EVT_BUTTON, self.adjust_monthly_profit)
+        btn_sizer.Add(btn2, 0, wx.RIGHT, 10)
 
-        save_btn = wx.Button(self, label="另存为...")
-        save_btn.Bind(wx.EVT_BUTTON, self.save_as)
-        btn_sizer.Add(save_btn, 0)
+        btn3 = wx.Button(self, label="调整库存毛利率")
+        btn3.Bind(wx.EVT_BUTTON, self.adjust_inventory_margin)
+        btn_sizer.Add(btn3, 0)
 
         main_sizer.Add(btn_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -137,112 +121,180 @@ class TaxAdjustTab(wx.Panel):
                 self.excel_file_path = file_path
                 self.file_entry.SetValue(os.path.basename(file_path))
 
-    def calculate(self, event=None):
-        file_path = self.excel_file_path
-        if not file_path:
+    def _ensure_file_selected(self):
+        """确保已选择文件"""
+        if not self.excel_file_path:
             wx.MessageBox("请先选择Excel文件", "错误", wx.OK | wx.ICON_ERROR)
+            return False
+        return True
+
+    def _load_adjuster(self):
+        """加载调整器"""
+        try:
+            self.adjuster = TaxAdjuster(self.excel_file_path)
+            return True
+        except Exception as e:
+            wx.MessageBox(f"加载文件失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+            return False
+
+    def adjust_annual_profit(self, event=None):
+        """处理"调整年利润"按钮点击"""
+        if not self._ensure_file_selected():
+            return
+
+        if not self._load_adjuster():
             return
 
         try:
-            rate = float(self.rate_entry.GetValue().strip())
-        except ValueError:
-            wx.MessageBox("请输入有效的税负率", "错误", wx.OK | wx.ICON_ERROR)
-            return
-
-        try:
-            self.adjuster = TaxAdjuster(file_path)
-            self.result = self.adjuster.calculate_adjustment(rate)
-            self.display_result()
+            result = self.adjuster.calculate_annual_profit_adjustment()
+            self.display_annual_profit_result(result)
         except Exception as e:
             wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
 
-    def display_result(self):
-        if not self.result:
+    def adjust_monthly_profit(self, event=None):
+        """处理"调整月毛利"按钮点击"""
+        if not self._ensure_file_selected():
             return
 
-        current = self.result['current']
-        target = self.result['target']
-        verify = self.result['verify']
+        if not self._load_adjuster():
+            return
 
-        self.result_text.SetValue("")
+        try:
+            result = self.adjuster.calculate_monthly_profit_adjustment()
+            self.display_monthly_profit_result(result)
+        except Exception as e:
+            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+
+    def adjust_inventory_margin(self, event=None):
+        """处理"调整库存毛利率"按钮点击"""
+        if not self._ensure_file_selected():
+            return
+
+        if not self._load_adjuster():
+            return
+
+        try:
+            result = self.adjuster.calculate_inventory_margin_adjustment()
+            self.display_inventory_margin_result(result)
+        except Exception as e:
+            wx.MessageBox(f"计算失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+
+    def display_annual_profit_result(self, result):
+        """显示年利润调整结果"""
+        current = result['current']
+        target = result['target']
+        verify = result['verify']
+        constant = result['constant']
 
         lines = []
         lines.append("=" * 60)
-        lines.append(" 调整目标")
+        lines.append(" 调整年利润 - 目标: G22 = 0.00")
         lines.append("=" * 60)
-        lines.append(f"  税负率:  {target['rate']*100:.4f}%")
-        lines.append(f"  E31:     -10 ~ 10 之间")
         lines.append("")
 
-        lines.append("=" * 60)
-        lines.append(" 需要调整的数据")
-        lines.append("=" * 60)
-        lines.append("")
-        lines.append(f"  G25 (成本系数):   {current['G25']}  ->  {target['G25']:.9f}")
-        lines.append(f"  E18 (年利润总额): {current['E18']:.2f}  ->  {target['E18']:.2f}")
-        lines.append("")
-
-        lines.append("=" * 60)
-        lines.append(" 调整前后对比")
-        lines.append("=" * 60)
-        lines.append(f"  {'项目':<16} {'调整前':>14} {'调整后':>14} {'变化':>12}")
-        lines.append(f"  {'-'*56}")
-        lines.append(f"  G25 成本系数     {current['G25']:>14.9f} {target['G25']:>14.9f} {(target['G25']-current['G25'])/current['G25']*100:>+11.2f}%")
-        lines.append(f"  E18 年利润总额   {current['E18']:>14,.2f} {target['E18']:>14,.2f} {target['E18']-current['E18']:>+12,.2f}")
-        lines.append(f"  J12 销售成本     {current['J12']:>14,.2f} {verify['J12']:>14,.2f} {verify['J12']-current['J12']:>+12,.2f}")
-        lines.append(f"  B46 当月利润     {current['B46']:>14,.2f} {verify['B46']:>14,.2f} {verify['B46']-current['B46']:>+12,.2f}")
-        lines.append(f"  E21 年应纳税额   {current['E21']:>14,.2f} {verify['E21']:>14,.2f} {verify['E21']-current['E21']:>+12,.2f}")
-        lines.append(f"  E31 差异         {current['E31']:>14,.2f} {verify['E31']:>14,.2f} {verify['E31']-current['E31']:>+12,.2f}")
-        cur_rate = current['E21']/current['E17']*100
-        new_rate = verify['rate']*100
-        lines.append(f"  税负率           {cur_rate:>13.4f}% {new_rate:>13.4f}% {new_rate-cur_rate:>+11.4f}%")
+        lines.append("【当前值】")
+        lines.append(f"  E17 (年收入):     {current['E17']:,.2f}")
+        lines.append(f"  E18 (年利润总额): {current['E18']:,.2f}")
+        lines.append(f"  E21 (年应纳税额): {current['E21']:,.2f}")
+        lines.append(f"  E22 (E21/2):      {current['E22']:,.2f}")
+        lines.append(f"  G22 (目标单元格): {current['G22']:,.2f}")
+        lines.append(f"  税负率常量:       {constant:.5f}")
         lines.append("")
 
-        lines.append("=" * 60)
-        lines.append(" 验证结果")
-        lines.append("=" * 60)
-        rate_ok = abs(verify['rate'] - target['rate']) < 0.00001
-        e31_ok = -10 <= verify['E31'] <= 10
-        lines.append(f"  税负率: {verify['rate']*100:.4f}%  {'OK' if rate_ok else 'FAIL'}")
-        lines.append(f"  E31:    {verify['E31']:.2f}  {'OK' if e31_ok else 'FAIL'}")
+        lines.append("【建议调整】")
+        lines.append(f"  E18 应改为: {target['E18']:,.2f}")
+        lines.append("")
+
+        lines.append("【验证结果】")
+        lines.append(f"  调整后 E21: {verify['E21']:,.2f}")
+        lines.append(f"  调整后 E22: {verify['E22']:,.2f}")
+        lines.append(f"  调整后 G22: {verify['G22']:,.4f}")
+
+        g22_ok = abs(verify['G22']) < 0.009
+        lines.append(f"  状态: {'OK' if g22_ok else 'FAIL'}")
 
         self.result_text.SetValue("\n".join(lines))
 
-    def apply_changes(self, event=None):
-        if not self.adjuster or not self.result:
-            wx.MessageBox("请先计算调整方案", "错误", wx.OK | wx.ICON_ERROR)
+    def display_monthly_profit_result(self, result):
+        """显示月毛利调整结果"""
+        current = result['current']
+        target = result['target']
+        verify = result['verify']
+        prev_profit = result['prev_profit']
+
+        lines = []
+        lines.append("=" * 60)
+        lines.append(" 调整月毛利 - 目标: E31 = 0.00")
+        lines.append("=" * 60)
+        lines.append("")
+
+        lines.append("【当前值】")
+        lines.append(f"  G25 (成本系数):   {current['G25']:.9f}")
+        lines.append(f"  B47 (利润总额):   {current['B47']:,.2f}")
+        lines.append(f"  E29 (年利润总额): {current['E29']:,.2f}")
+        lines.append(f"  E30 (累计利润):   {current['E30']:,.2f}")
+        lines.append(f"  E31 (目标单元格): {current['E31']:,.2f}")
+        lines.append(f"  J12 (销售成本):   {current['J12']:,.2f}")
+        lines.append(f"  上期累计利润:     {prev_profit:,.2f}")
+        lines.append("")
+
+        lines.append("【建议调整】")
+        lines.append(f"  G25 应改为: {target['G25']:.9f}")
+        lines.append(f"  (目标B47:   {target['B47']:,.2f})")
+        lines.append("")
+
+        lines.append("【验证结果】")
+        lines.append(f"  调整后 B47: {verify['B47']:,.2f}")
+        lines.append(f"  调整后 E30: {verify['E30']:,.2f}")
+        lines.append(f"  调整后 E31: {verify['E31']:,.4f}")
+        lines.append(f"  调整后 J12: {verify['J12']:,.2f}")
+
+        e31_ok = abs(verify['E31']) < 0.009
+        lines.append(f"  状态: {'OK' if e31_ok else 'FAIL'}")
+
+        self.result_text.SetValue("\n".join(lines))
+
+    def display_inventory_margin_result(self, result):
+        """显示库存毛利率调整结果"""
+        if 'error' in result:
+            lines = []
+            lines.append("=" * 60)
+            lines.append(" 调整库存毛利率 - 错误")
+            lines.append("=" * 60)
+            lines.append("")
+            lines.append(f"  {result['error']}")
+            self.result_text.SetValue("\n".join(lines))
             return
 
-        dialog = wx.MessageDialog(
-            self,
-            "确定要将修改应用到原文件吗？",
-            "确认",
-            wx.YES_NO | wx.ICON_QUESTION
-        )
-        if dialog.ShowModal() == wx.ID_YES:
-            try:
-                target = self.result['target']
-                save_path = self.adjuster.apply_adjustment(target['G25'], target['E18'])
-                wx.MessageBox(f"已保存至:\n{save_path}", "成功", wx.OK | wx.ICON_INFORMATION)
-            except Exception as e:
-                wx.MessageBox(f"保存失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+        current = result['current']
+        target = result['target']
+        verify = result['verify']
 
-    def save_as(self, event=None):
-        if not self.adjuster or not self.result:
-            wx.MessageBox("请先计算调整方案", "错误", wx.OK | wx.ICON_ERROR)
-            return
+        lines = []
+        lines.append("=" * 60)
+        lines.append(" 调整库存毛利率 - 目标: H11 = 0, F20 = 0")
+        lines.append("=" * 60)
+        lines.append("")
 
-        with wx.FileDialog(
-            self,
-            "另存为",
-            wildcard="Excel文件 (*.xlsx)|*.xlsx|所有文件 (*.*)|*.*",
-            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT
-        ) as dialog:
-            if dialog.ShowModal() == wx.ID_OK:
-                filename = dialog.GetPath()
-                try:
-                    target = self.result['target']
-                    save_path = self.adjuster.apply_adjustment(target['G25'], target['E18'], filename)
-                    wx.MessageBox(f"已保存至:\n{save_path}", "成功", wx.OK | wx.ICON_INFORMATION)
-                except Exception as e:
-                    wx.MessageBox(f"保存失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+        lines.append("【当前值】")
+        lines.append(f"  毛利率 (E14除数): {current['margin']:.4f}")
+        lines.append(f"  H11 (目标1):      {current['H11']:,.2f}")
+        lines.append(f"  B11 (加工费):     {current['B11']:,.2f}")
+        lines.append(f"  F20 (目标2):      {current['F20']:,.2f}")
+        lines.append("")
+
+        lines.append("【建议调整】")
+        lines.append(f"  毛利率应改为: {target['margin']:.4f}")
+        lines.append(f"  B11 应改为:   {target['B11']:,.2f}")
+        lines.append("")
+
+        lines.append("【验证结果】")
+        lines.append(f"  调整后 H11: {verify['H11']:,.2f}")
+        lines.append(f"  调整后 F20: {verify['F20']:,.2f}")
+
+        h11_ok = abs(verify['H11']) < 5.0
+        f20_ok = abs(verify['F20']) < 20000.0
+        lines.append(f"  H11 状态: {'OK' if h11_ok else 'FAIL'} (容差 ±5.0)")
+        lines.append(f"  F20 状态: {'OK' if f20_ok else 'FAIL'} (容差 ±20000.0)")
+
+        self.result_text.SetValue("\n".join(lines))

@@ -366,6 +366,15 @@ class TaxAdjustTab(wx.Panel):
         if not self._ensure_file_selected():
             return
 
+        # 弹出参数设置对话框
+        dialog = MarginParamsDialog(self)
+        if dialog.ShowModal() != wx.ID_OK:
+            dialog.Destroy()
+            return
+
+        params = dialog.get_params()
+        dialog.Destroy()
+
         if not self._load_adjuster():
             return
 
@@ -375,7 +384,11 @@ class TaxAdjustTab(wx.Panel):
 
         def do_calculate():
             try:
-                result = self.adjuster.calculate_inventory_margin_adjustment()
+                result = self.adjuster.calculate_inventory_margin_adjustment(
+                    h11_range=params['h11_range'],
+                    f20_range=params['f20_range'],
+                    margin_range=params['margin_range']
+                )
                 wx.CallAfter(self._on_inventory_margin_complete, result, None)
             except Exception as e:
                 wx.CallAfter(self._on_inventory_margin_complete, None, e)

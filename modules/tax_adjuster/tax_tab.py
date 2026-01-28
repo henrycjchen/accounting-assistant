@@ -372,7 +372,7 @@ class TaxAdjustTab(wx.Panel):
         self.Layout()
 
     def display_inventory_margin_result(self, result):
-        """显示库存毛利率调整结果"""
+        """显示库存毛利率调整结果（帕累托多解）"""
         if 'error' in result:
             self.suggest_box.Show()
             self.verify_box.Hide()
@@ -384,68 +384,95 @@ class TaxAdjustTab(wx.Panel):
             self.Layout()
             return
 
-        current = result['current']
-        target = result['target']
-        verify = result['verify']
+        solutions = result.get('solutions', [])
+
+        if not solutions:
+            self.suggest_box.Show()
+            self.verify_box.Hide()
+            self.status_box.Hide()
+            self._clear_grid(self.suggest_grid)
+            self._set_cell(self.suggest_grid, 0, 0, "提示:", bold=True)
+            self._set_cell(self.suggest_grid, 0, 1, "未找到可行方案")
+            self._auto_size_grid(self.suggest_grid)
+            self.Layout()
+            return
 
         # 显示卡片
         self.suggest_box.Show()
         self.verify_box.Show()
-        self.status_box.Show()
+        self.status_box.Hide()  # 帕累托模式不显示状态卡片
 
-        # === 建议调整卡片 ===
+        # === 建议调整卡片（显示推荐方案）===
         self._clear_grid(self.suggest_grid)
-        self._set_cell(self.suggest_grid, 0, 0, "毛利率 (E14除数):", bold=True)
-        self._set_cell(self.suggest_grid, 0, 1, f"{target['margin']:.5f}", color=wx.Colour(0, 100, 180), align_right=True)
-        self._set_cell(self.suggest_grid, 1, 0, "B11 (产品成本加工费):", bold=True)
-        self._set_cell(self.suggest_grid, 1, 1, f"{target['B11']:,.2f}", color=wx.Colour(0, 100, 180), align_right=True)
+        # 找到推荐方案（均衡推荐或第一个）
+        recommended = None
+        for sol in solutions:
+            if sol.get('label') == '均衡推荐':
+                recommended = sol
+                break
+        if recommended is None and solutions:
+            recommended = solutions[0]
+
+        if recommended:
+            self._set_cell(self.suggest_grid, 0, 0, f"推荐方案 ({recommended.get('label', '')}):", bold=True)
+            self._set_cell(self.suggest_grid, 0, 1, "")
+            self._set_cell(self.suggest_grid, 1, 0, f"  毛利率: {recommended['margin']:.5f}", color=wx.Colour(0, 100, 180))
+            self._set_cell(self.suggest_grid, 1, 1, f"  B11: {recommended['B11']:,.2f}", color=wx.Colour(0, 100, 180))
         self._auto_size_grid(self.suggest_grid)
 
-        # === 验证结果卡片 ===
+        # === 验证结果卡片（显示所有候选方案）===
+        # 重新调整 Grid 大小
+        num_solutions = len(solutions)
+        if self.verify_grid.GetNumberRows() < num_solutions + 1:
+            self.verify_grid.AppendRows(num_solutions + 1 - self.verify_grid.GetNumberRows())
+        if self.verify_grid.GetNumberCols() < 6:
+            self.verify_grid.AppendCols(6 - self.verify_grid.GetNumberCols())
+
         self._clear_grid(self.verify_grid)
+
         # 表头
-        self._set_cell(self.verify_grid, 0, 0, "项目", bold=True)
-        self._set_cell(self.verify_grid, 0, 1, "当前值", bold=True)
-        self._set_cell(self.verify_grid, 0, 2, "调整范围", bold=True)
-        self._set_cell(self.verify_grid, 0, 3, "调整值", bold=True)
+        headers = ["方案", "毛利率", "B11", "H11", "F20", "状态"]
+        for col, header in enumerate(headers):
+            self._set_cell(self.verify_grid, 0, col, header, bold=True)
 
-        # 毛利率
-        self._set_cell(self.verify_grid, 1, 0, "毛利率")
-        self._set_cell(self.verify_grid, 1, 1, f"{current['margin']:.5f}", align_right=True)
-        self._set_cell(self.verify_grid, 1, 2, f"{TaxAdjuster.MARGIN_MIN:.2f} ~ {TaxAdjuster.MARGIN_MAX:.2f}", align_right=True)
-        self._set_cell(self.verify_grid, 1, 3, f"{target['margin']:.5f}", align_right=True)
+        # 填充每个方案
+        for row, sol in enumerate(solutions, start=1):
+            label = sol.get('label', f'方案{row}')
+            h11_ok = sol.get('h11_ok', False)
+            f20_ok = sol.get('f20_ok', False)
 
-        # B11
-        self._set_cell(self.verify_grid, 2, 0, "B11 (加工费)")
-        self._set_cell(self.verify_grid, 2, 1, f"{current['B11']:,.2f}", align_right=True)
-        self._set_cell(self.verify_grid, 2, 2, f"{TaxAdjuster.B11_MIN:,} ~ {TaxAdjuster.B11_MAX:,}", align_right=True)
-        self._set_cell(self.verify_grid, 2, 3, f"{target['B11']:,.2f}", align_right=True)
+            # 方案标签
+            label_color = wx.Colour(0, 100, 180) if label == '均衡推荐' else None
+            self._set_cell(self.verify_grid, row, 0, label, bold=(label == '均衡推荐'), color=label_color)
 
-        # H11
-        h11_ok = abs(verify['H11']) < 5.0
-        self._set_cell(self.verify_grid, 3, 0, "H11")
-        self._set_cell(self.verify_grid, 3, 1, f"{current['H11']:,.2f}", align_right=True)
-        self._set_cell(self.verify_grid, 3, 2, f"{TaxAdjuster.H11_MIN:.0f} ~ {TaxAdjuster.H11_MAX:.0f}", align_right=True)
-        self._set_cell(self.verify_grid, 3, 3, f"{verify['H11']:,.2f}",
-                       color=wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0), align_right=True)
+            # 毛利率
+            self._set_cell(self.verify_grid, row, 1, f"{sol['margin']:.5f}", align_right=True)
 
-        # F20
-        f20_ok = abs(verify['F20']) < 20000.0
-        self._set_cell(self.verify_grid, 4, 0, "F20")
-        self._set_cell(self.verify_grid, 4, 1, f"{current['F20']:,.2f}", align_right=True)
-        self._set_cell(self.verify_grid, 4, 2, f"{TaxAdjuster.F20_MIN:,} ~ {TaxAdjuster.F20_MAX:,}", align_right=True)
-        self._set_cell(self.verify_grid, 4, 3, f"{verify['F20']:,.2f}",
-                       color=wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0), align_right=True)
+            # B11
+            self._set_cell(self.verify_grid, row, 2, f"{sol['B11']:,.0f}", align_right=True)
+
+            # H11
+            h11_color = wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0)
+            self._set_cell(self.verify_grid, row, 3, f"{sol['H11']:,.2f}", color=h11_color, align_right=True)
+
+            # F20
+            f20_color = wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0)
+            self._set_cell(self.verify_grid, row, 4, f"{sol['F20']:,.0f}", color=f20_color, align_right=True)
+
+            # 状态
+            if h11_ok and f20_ok:
+                status = "✓ 全部达标"
+                status_color = wx.Colour(0, 128, 0)
+            elif h11_ok:
+                status = "H11达标"
+                status_color = wx.Colour(200, 150, 0)
+            elif f20_ok:
+                status = "F20达标"
+                status_color = wx.Colour(200, 150, 0)
+            else:
+                status = "均未达标"
+                status_color = wx.Colour(200, 0, 0)
+            self._set_cell(self.verify_grid, row, 5, status, color=status_color)
+
         self._auto_size_grid(self.verify_grid)
-
-        # === 状态卡片 ===
-        self._clear_grid(self.status_grid)
-        self._set_cell(self.status_grid, 0, 0, "H11:", bold=True)
-        self._set_cell(self.status_grid, 0, 1, "OK" if h11_ok else "FAIL",
-                       color=wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0))
-        self._set_cell(self.status_grid, 0, 2, "F20:", bold=True)
-        self._set_cell(self.status_grid, 0, 3, "OK" if f20_ok else "FAIL",
-                       color=wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0))
-        self._auto_size_grid(self.status_grid)
-
         self.Layout()

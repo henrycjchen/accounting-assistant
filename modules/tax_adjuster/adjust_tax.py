@@ -742,6 +742,126 @@ class TaxAdjuster:
 
         return best_result
 
+    def find_optimal_margin_v2(self, h11_range, f20_range, margin_range):
+        """
+        优化版搜索算法：利用 F20-B11 线性关系 + 二分法
+
+        原理：
+        - 对于任意固定的 margin 值，F20 与 B11 是完美线性关系
+        - 只需 2 次计算即可确定直线方程，直接求解使 F20 落在目标范围内的 B11
+        - 对 margin 使用二分法搜索，找到使 H11 落在目标范围内的值
+
+        Args:
+            h11_range: (min, max) H11 目标范围
+            f20_range: (min, max) F20 目标范围
+            margin_range: (min, max) 毛利率搜索范围
+
+        Returns:
+            dict: 包含 margin, B11, H11, F20, converged, iterations
+        """
+        h11_min, h11_max = h11_range
+        f20_min, f20_max = f20_range
+        margin_min, margin_max = margin_range
+
+        calc_count = 0
+        best_result = None
+        best_error = float('inf')
+
+        def get_values(margin, b11):
+            """获取 H11 和 F20 值"""
+            nonlocal calc_count
+            calc_count += 1
+            inputs = {
+                self._cell_key(self.MARGIN_SHEET, self.MARGIN_CELL): margin,
+                self._cell_key('产品成本', 'B11'): b11,
+            }
+            solution = self._calculate(inputs)
+            h11 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'H11'))
+            f20 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'F20'))
+            return h11, f20
+
+        def find_b11_for_target_f20(margin, target_f20):
+            """利用线性关系计算使 F20=target 的 B11"""
+            # 采样两点确定直线: F20 = k * B11 + b
+            b11_sample_1, b11_sample_2 = 0, 100000
+            _, f20_1 = get_values(margin, b11_sample_1)
+            _, f20_2 = get_values(margin, b11_sample_2)
+
+            # 计算斜率
+            k = (f20_2 - f20_1) / (b11_sample_2 - b11_sample_1)
+            b = f20_1  # 截距 (当 B11=0 时)
+
+            if abs(k) < 1e-10:
+                # 斜率太小，F20 几乎不随 B11 变化
+                return b11_sample_1
+
+            # 求解 B11 = (target_f20 - b) / k
+            target_b11 = (target_f20 - b) / k
+            # 约束到安全范围
+            target_b11 = max(self.B11_MIN, min(self.B11_MAX, target_b11))
+            return target_b11
+
+        # 二分法搜索 margin
+        self._report_progress(20, "二分法搜索最优毛利率...")
+        low, high = margin_min, margin_max
+        target_f20 = (f20_min + f20_max) / 2  # F20 目标中点
+
+        for iteration in range(25):  # 最多 25 次迭代
+            mid = (low + high) / 2
+
+            # 利用线性关系直接计算 B11
+            b11 = find_b11_for_target_f20(mid, target_f20)
+
+            # 验证结果
+            h11, f20 = get_values(mid, b11)
+            error = abs(h11) / 10.0 + abs(f20) / 40000.0
+
+            # 更新最优解
+            if error < best_error:
+                best_error = error
+                best_result = {
+                    'margin': mid,
+                    'B11': b11,
+                    'H11': h11,
+                    'F20': f20,
+                }
+
+            # 检查是否满足约束
+            h11_ok = h11_min <= h11 <= h11_max
+            f20_ok = f20_min <= f20 <= f20_max
+
+            if h11_ok and f20_ok:
+                # 找到满足约束的解
+                best_result['converged'] = True
+                best_result['iterations'] = calc_count
+                return best_result
+
+            # 调整搜索范围
+            # H11 通常随 margin 增加而增加
+            if h11 < (h11_min + h11_max) / 2:
+                low = mid
+            else:
+                high = mid
+
+            # 检查收敛
+            if high - low < 0.0001:
+                break
+
+            self._report_progress(20 + int(iteration * 2.5), f"搜索中... (迭代 {iteration + 1})")
+
+        # 未找到精确解，返回最优近似解
+        if best_result is None:
+            best_result = {
+                'margin': (margin_min + margin_max) / 2,
+                'B11': 0,
+                'H11': 0,
+                'F20': 0,
+            }
+
+        best_result['converged'] = False
+        best_result['iterations'] = calc_count
+        return best_result
+
     def find_alternative_solutions(self, optimal_result, target_H11=0, target_F20=0, num_alternatives=4):
         """
         生成帕累托前沿上的备选方案

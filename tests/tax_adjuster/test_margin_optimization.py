@@ -90,3 +90,35 @@ class TestFindOptimalMarginV2:
     def test_returns_approximate_when_no_exact_solution(self):
         """验证无精确解时返回近似解"""
         pass
+
+
+class TestCalculateInventoryMarginAdjustment:
+    """测试 calculate_inventory_margin_adjustment 参数传递"""
+
+    def test_accepts_range_parameters(self):
+        """验证方法接受范围参数"""
+        from modules.tax_adjuster.adjust_tax import TaxAdjuster
+        import inspect
+
+        sig = inspect.signature(TaxAdjuster.calculate_inventory_margin_adjustment)
+        params = list(sig.parameters.keys())
+
+        assert 'h11_range' in params
+        assert 'f20_range' in params
+        assert 'margin_range' in params
+
+    def test_default_values_match_class_constants(self):
+        """验证默认值与类常量一致"""
+        from modules.tax_adjuster.adjust_tax import TaxAdjuster
+        import inspect
+
+        sig = inspect.signature(TaxAdjuster.calculate_inventory_margin_adjustment)
+
+        h11_default = sig.parameters['h11_range'].default
+        f20_default = sig.parameters['f20_range'].default
+        margin_default = sig.parameters['margin_range'].default
+
+        # None means use class defaults
+        assert h11_default is None
+        assert f20_default is None
+        assert margin_default is None

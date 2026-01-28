@@ -934,10 +934,16 @@ class TaxAdjuster:
 
         return alternatives[:num_alternatives]
 
-    def calculate_inventory_margin_adjustment(self, max_solutions=5):
+    def calculate_inventory_margin_adjustment(
+        self,
+        h11_range=None,
+        f20_range=None,
+        margin_range=None,
+        max_solutions=5
+    ):
         """
         计算库存毛利率调整方案（优化版：利用F20线性特性快速搜索）
-        目标: 使 H11 = 0.00, F20 = 0.00
+        目标: 使 H11 和 F20 落在指定范围内
         工作表: 生产成本月结表、产品成本
         调整变量: 毛利率 (J14单元格), B11 (产品成本中的加工费)
 
@@ -947,11 +953,21 @@ class TaxAdjuster:
         - 总计算量从 ~600 次降低到 ~50 次
 
         Args:
+            h11_range: (min, max) H11 目标范围，默认 (-10, 10)
+            f20_range: (min, max) F20 目标范围，默认 (-40000, 40000)
+            margin_range: (min, max) 毛利率搜索范围，默认 (0.70, 0.90)
             max_solutions: 最多返回的候选方案数量，默认 5
 
         Returns:
             dict: 包含 current（当前值）、solutions（方案列表）、stats（搜索统计）
         """
+        # 使用默认值
+        if h11_range is None:
+            h11_range = (self.H11_MIN, self.H11_MAX)
+        if f20_range is None:
+            f20_range = (self.F20_MIN, self.F20_MAX)
+        if margin_range is None:
+            margin_range = (self.MARGIN_MIN, self.MARGIN_MAX)
         self._report_progress(0, "正在加载 Excel 模型...")
         self._load_model()
         try:
@@ -983,10 +999,10 @@ class TaxAdjuster:
 
             # 使用优化的快速搜索算法
             self._report_progress(15, "正在快速搜索最优解...")
-            optimal_result = self.find_optimal_margin_fast(
-                target_H11=0, target_F20=0,
-                h11_tolerance=1.0,
-                f20_tolerance=100
+            optimal_result = self.find_optimal_margin_v2(
+                h11_range=h11_range,
+                f20_range=f20_range,
+                margin_range=margin_range
             )
 
             # 构建解列表

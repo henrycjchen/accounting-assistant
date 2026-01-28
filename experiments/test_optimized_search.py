@@ -14,11 +14,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from modules.tax_adjuster.adjust_tax import TaxAdjuster
 
 
-def test_optimized_search(file_path):
-    """测试优化后的搜索算法"""
+def test_optimized_search_v2(file_path, h11_range=(-10, 10), f20_range=(-40000, 40000), margin_range=(0.70, 0.90)):
+    """测试优化后的搜索算法 v2"""
 
     print("=" * 60)
     print(f"测试文件: {os.path.basename(file_path)}")
+    print(f"参数: H11={h11_range}, F20={f20_range}, margin={margin_range}")
     print("=" * 60)
 
     # 进度回调
@@ -27,10 +28,14 @@ def test_optimized_search(file_path):
 
     adjuster = TaxAdjuster(file_path, progress_callback=progress_callback)
 
-    # 测试优化后的算法
-    print("\n>>> 测试优化后的算法 <<<")
+    print("\n>>> 测试优化算法 v2 <<<")
     start_time = time.time()
-    result = adjuster.calculate_inventory_margin_adjustment(max_solutions=5)
+    result = adjuster.calculate_inventory_margin_adjustment(
+        h11_range=h11_range,
+        f20_range=f20_range,
+        margin_range=margin_range,
+        max_solutions=5
+    )
     elapsed = time.time() - start_time
 
     if 'error' in result:
@@ -47,7 +52,7 @@ def test_optimized_search(file_path):
     print(f"\n当前值:")
     current = result['current']
     print(f"  毛利率: {current['margin']:.5f}")
-    print(f"  B11: {current['B11']:,.2f}")
+    print(f"  B11: {current.get('B11', 0):,.2f}")
     print(f"  H11: {current['H11']:,.2f}")
     print(f"  F20: {current['F20']:,.2f}")
 
@@ -81,18 +86,17 @@ def test_optimized_search(file_path):
         print(f"  预期 H11: {optimal['H11']:.2f}")
         print(f"  预期 F20: {optimal['F20']:.2f}")
 
-        # 检查是否达标
-        h11_target_ok = abs(optimal['H11']) < 1.0
-        f20_target_ok = abs(optimal['F20']) < 100
+        # 检查是否在目标范围内
+        h11_target_ok = h11_range[0] <= optimal['H11'] <= h11_range[1]
+        f20_target_ok = f20_range[0] <= optimal['F20'] <= f20_range[1]
         print(f"\n达标情况:")
-        print(f"  H11 目标 (|H11| < 1.0): {'达标 ✓' if h11_target_ok else '未达标 ✗'}")
-        print(f"  F20 目标 (|F20| < 100): {'达标 ✓' if f20_target_ok else '未达标 ✗'}")
+        print(f"  H11 目标 ({h11_range[0]} ~ {h11_range[1]}): {'达标 ✓' if h11_target_ok else '未达标 ✗'}")
+        print(f"  F20 目标 ({f20_range[0]} ~ {f20_range[1]}): {'达标 ✓' if f20_target_ok else '未达标 ✗'}")
 
     return result
 
 
 if __name__ == '__main__':
-    # 使用测试文件
     test_files = [
         '/Users/chenjiabin/Documents/demo/accounting-assistant/洪运来2511.xlsx',
         '/Users/chenjiabin/Documents/demo/accounting-assistant/data/洪运来2512.xlsx',
@@ -100,7 +104,11 @@ if __name__ == '__main__':
 
     for f in test_files:
         if os.path.exists(f):
-            test_optimized_search(f)
+            # 默认参数测试
+            test_optimized_search_v2(f)
+            print("\n")
+            # 自定义参数测试
+            test_optimized_search_v2(f, h11_range=(-5, 5), f20_range=(-20000, 20000))
             break
     else:
         print("未找到测试文件")

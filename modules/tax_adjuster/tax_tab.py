@@ -25,6 +25,100 @@ class FileDropTarget(wx.FileDropTarget):
         return True
 
 
+class MarginParamsDialog(wx.Dialog):
+    """库存毛利率参数设置对话框"""
+
+    def __init__(self, parent):
+        super().__init__(
+            parent,
+            title="调整库存毛利率 - 参数设置",
+            style=wx.DEFAULT_DIALOG_STYLE
+        )
+
+        # 默认值
+        self.defaults = {
+            'h11_min': TaxAdjuster.H11_MIN,
+            'h11_max': TaxAdjuster.H11_MAX,
+            'f20_min': TaxAdjuster.F20_MIN,
+            'f20_max': TaxAdjuster.F20_MAX,
+            'margin_min': TaxAdjuster.MARGIN_MIN,
+            'margin_max': TaxAdjuster.MARGIN_MAX,
+        }
+
+        self.setup_ui()
+        self.Centre()
+
+    def setup_ui(self):
+        """设置界面"""
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # 参数输入区域
+        grid_sizer = wx.FlexGridSizer(rows=3, cols=4, hgap=10, vgap=10)
+
+        # H11 范围
+        grid_sizer.Add(wx.StaticText(self, label="H11 范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.h11_min_ctrl = wx.TextCtrl(self, value=str(self.defaults['h11_min']), size=(80, -1))
+        grid_sizer.Add(self.h11_min_ctrl, 0)
+        grid_sizer.Add(wx.StaticText(self, label="~"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_CENTER_HORIZONTAL)
+        self.h11_max_ctrl = wx.TextCtrl(self, value=str(self.defaults['h11_max']), size=(80, -1))
+        grid_sizer.Add(self.h11_max_ctrl, 0)
+
+        # F20 范围
+        grid_sizer.Add(wx.StaticText(self, label="F20 范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.f20_min_ctrl = wx.TextCtrl(self, value=str(self.defaults['f20_min']), size=(80, -1))
+        grid_sizer.Add(self.f20_min_ctrl, 0)
+        grid_sizer.Add(wx.StaticText(self, label="~"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_CENTER_HORIZONTAL)
+        self.f20_max_ctrl = wx.TextCtrl(self, value=str(self.defaults['f20_max']), size=(80, -1))
+        grid_sizer.Add(self.f20_max_ctrl, 0)
+
+        # 毛利率范围
+        grid_sizer.Add(wx.StaticText(self, label="毛利率范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.margin_min_ctrl = wx.TextCtrl(self, value=str(self.defaults['margin_min']), size=(80, -1))
+        grid_sizer.Add(self.margin_min_ctrl, 0)
+        grid_sizer.Add(wx.StaticText(self, label="~"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_CENTER_HORIZONTAL)
+        self.margin_max_ctrl = wx.TextCtrl(self, value=str(self.defaults['margin_max']), size=(80, -1))
+        grid_sizer.Add(self.margin_max_ctrl, 0)
+
+        main_sizer.Add(grid_sizer, 0, wx.ALL | wx.EXPAND, 20)
+
+        # 按钮
+        btn_sizer = wx.StdDialogButtonSizer()
+        cancel_btn = wx.Button(self, wx.ID_CANCEL, "取消")
+        ok_btn = wx.Button(self, wx.ID_OK, "开始计算")
+        ok_btn.SetDefault()
+        btn_sizer.AddButton(cancel_btn)
+        btn_sizer.AddButton(ok_btn)
+        btn_sizer.Realize()
+
+        main_sizer.Add(btn_sizer, 0, wx.ALL | wx.ALIGN_CENTER, 10)
+
+        self.SetSizer(main_sizer)
+        main_sizer.Fit(self)
+
+    def get_params(self):
+        """返回用户输入的参数"""
+        try:
+            h11_min = float(self.h11_min_ctrl.GetValue())
+            h11_max = float(self.h11_max_ctrl.GetValue())
+            f20_min = float(self.f20_min_ctrl.GetValue())
+            f20_max = float(self.f20_max_ctrl.GetValue())
+            margin_min = float(self.margin_min_ctrl.GetValue())
+            margin_max = float(self.margin_max_ctrl.GetValue())
+        except ValueError:
+            # 输入无效，返回默认值
+            return {
+                'h11_range': (self.defaults['h11_min'], self.defaults['h11_max']),
+                'f20_range': (self.defaults['f20_min'], self.defaults['f20_max']),
+                'margin_range': (self.defaults['margin_min'], self.defaults['margin_max']),
+            }
+
+        return {
+            'h11_range': (h11_min, h11_max),
+            'f20_range': (f20_min, f20_max),
+            'margin_range': (margin_min, margin_max),
+        }
+
+
 class TaxAdjustTab(wx.Panel):
     """调整测算表 Tab"""
 

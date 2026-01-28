@@ -5,6 +5,7 @@
 """
 
 import pytest
+import wx
 from unittest.mock import MagicMock, patch
 
 
@@ -122,3 +123,71 @@ class TestCalculateInventoryMarginAdjustment:
         assert h11_default is None
         assert f20_default is None
         assert margin_default is None
+
+
+class TestMarginParamsDialog:
+    """测试参数对话框"""
+
+    @pytest.fixture
+    def wx_app(self):
+        """创建 wx.App 用于测试"""
+        app = wx.App()
+        yield app
+        app.Destroy()
+
+    def test_dialog_has_required_fields(self, wx_app):
+        """验证对话框包含必要的输入字段"""
+        import wx
+        from modules.tax_adjuster.tax_tab import MarginParamsDialog
+
+        frame = wx.Frame(None)
+        dialog = MarginParamsDialog(frame)
+
+        # 验证字段存在
+        assert hasattr(dialog, 'h11_min_ctrl')
+        assert hasattr(dialog, 'h11_max_ctrl')
+        assert hasattr(dialog, 'f20_min_ctrl')
+        assert hasattr(dialog, 'f20_max_ctrl')
+        assert hasattr(dialog, 'margin_min_ctrl')
+        assert hasattr(dialog, 'margin_max_ctrl')
+
+        dialog.Destroy()
+        frame.Destroy()
+
+    def test_get_params_returns_dict(self, wx_app):
+        """验证 get_params 返回正确格式的字典"""
+        import wx
+        from modules.tax_adjuster.tax_tab import MarginParamsDialog
+
+        frame = wx.Frame(None)
+        dialog = MarginParamsDialog(frame)
+
+        params = dialog.get_params()
+
+        assert 'h11_range' in params
+        assert 'f20_range' in params
+        assert 'margin_range' in params
+        assert len(params['h11_range']) == 2
+        assert len(params['f20_range']) == 2
+        assert len(params['margin_range']) == 2
+
+        dialog.Destroy()
+        frame.Destroy()
+
+    def test_default_values(self, wx_app):
+        """验证默认值正确"""
+        import wx
+        from modules.tax_adjuster.tax_tab import MarginParamsDialog
+        from modules.tax_adjuster.adjust_tax import TaxAdjuster
+
+        frame = wx.Frame(None)
+        dialog = MarginParamsDialog(frame)
+
+        params = dialog.get_params()
+
+        assert params['h11_range'] == (TaxAdjuster.H11_MIN, TaxAdjuster.H11_MAX)
+        assert params['f20_range'] == (TaxAdjuster.F20_MIN, TaxAdjuster.F20_MAX)
+        assert params['margin_range'] == (TaxAdjuster.MARGIN_MIN, TaxAdjuster.MARGIN_MAX)
+
+        dialog.Destroy()
+        frame.Destroy()

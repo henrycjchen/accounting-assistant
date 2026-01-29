@@ -26,7 +26,7 @@ class FileDropTarget(wx.FileDropTarget):
 
 
 class MarginParamsDialog(wx.Dialog):
-    """库存毛利率参数设置对话框"""
+    """库存毛利率参数设置对话框（扫描加工费对照表）"""
 
     def __init__(self, parent):
         super().__init__(
@@ -37,10 +37,11 @@ class MarginParamsDialog(wx.Dialog):
 
         # 默认值
         self.defaults = {
+            'b11_start': 20000,
+            'b11_end': 400000,
+            'b11_step': 20000,
             'h11_min': TaxAdjuster.H11_MIN,
             'h11_max': TaxAdjuster.H11_MAX,
-            'f20_min': TaxAdjuster.F20_MIN,
-            'f20_max': TaxAdjuster.F20_MAX,
             'margin_min': TaxAdjuster.MARGIN_MIN,
             'margin_max': TaxAdjuster.MARGIN_MAX,
         }
@@ -53,7 +54,22 @@ class MarginParamsDialog(wx.Dialog):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
 
         # 参数输入区域
-        grid_sizer = wx.FlexGridSizer(rows=3, cols=4, hgap=10, vgap=10)
+        grid_sizer = wx.FlexGridSizer(rows=4, cols=4, hgap=10, vgap=10)
+
+        # B11（加工费）范围
+        grid_sizer.Add(wx.StaticText(self, label="加工费起始:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.b11_start_ctrl = wx.TextCtrl(self, value=str(self.defaults['b11_start']), size=(80, -1))
+        grid_sizer.Add(self.b11_start_ctrl, 0)
+        grid_sizer.Add(wx.StaticText(self, label="结束:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT)
+        self.b11_end_ctrl = wx.TextCtrl(self, value=str(self.defaults['b11_end']), size=(80, -1))
+        grid_sizer.Add(self.b11_end_ctrl, 0)
+
+        # B11 步进
+        grid_sizer.Add(wx.StaticText(self, label="步进:"), 0, wx.ALIGN_CENTER_VERTICAL)
+        self.b11_step_ctrl = wx.TextCtrl(self, value=str(self.defaults['b11_step']), size=(80, -1))
+        grid_sizer.Add(self.b11_step_ctrl, 0)
+        grid_sizer.Add(wx.StaticText(self, label=""), 0)  # 占位
+        grid_sizer.Add(wx.StaticText(self, label=""), 0)  # 占位
 
         # H11 范围
         grid_sizer.Add(wx.StaticText(self, label="H11 范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -62,14 +78,6 @@ class MarginParamsDialog(wx.Dialog):
         grid_sizer.Add(wx.StaticText(self, label="~"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_CENTER_HORIZONTAL)
         self.h11_max_ctrl = wx.TextCtrl(self, value=str(self.defaults['h11_max']), size=(80, -1))
         grid_sizer.Add(self.h11_max_ctrl, 0)
-
-        # F20 范围
-        grid_sizer.Add(wx.StaticText(self, label="F20 范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.f20_min_ctrl = wx.TextCtrl(self, value=str(self.defaults['f20_min']), size=(80, -1))
-        grid_sizer.Add(self.f20_min_ctrl, 0)
-        grid_sizer.Add(wx.StaticText(self, label="~"), 0, wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_CENTER_HORIZONTAL)
-        self.f20_max_ctrl = wx.TextCtrl(self, value=str(self.defaults['f20_max']), size=(80, -1))
-        grid_sizer.Add(self.f20_max_ctrl, 0)
 
         # 毛利率范围
         grid_sizer.Add(wx.StaticText(self, label="毛利率范围:"), 0, wx.ALIGN_CENTER_VERTICAL)
@@ -84,7 +92,7 @@ class MarginParamsDialog(wx.Dialog):
         # 按钮
         btn_sizer = wx.StdDialogButtonSizer()
         cancel_btn = wx.Button(self, wx.ID_CANCEL, "取消")
-        ok_btn = wx.Button(self, wx.ID_OK, "开始计算")
+        ok_btn = wx.Button(self, wx.ID_OK, "开始扫描")
         ok_btn.SetDefault()
         btn_sizer.AddButton(cancel_btn)
         btn_sizer.AddButton(ok_btn)
@@ -98,23 +106,28 @@ class MarginParamsDialog(wx.Dialog):
     def get_params(self):
         """返回用户输入的参数"""
         try:
+            b11_start = int(self.b11_start_ctrl.GetValue())
+            b11_end = int(self.b11_end_ctrl.GetValue())
+            b11_step = int(self.b11_step_ctrl.GetValue())
             h11_min = float(self.h11_min_ctrl.GetValue())
             h11_max = float(self.h11_max_ctrl.GetValue())
-            f20_min = float(self.f20_min_ctrl.GetValue())
-            f20_max = float(self.f20_max_ctrl.GetValue())
             margin_min = float(self.margin_min_ctrl.GetValue())
             margin_max = float(self.margin_max_ctrl.GetValue())
         except ValueError:
             # 输入无效，返回默认值
             return {
-                'h11_range': (self.defaults['h11_min'], self.defaults['h11_max']),
-                'f20_range': (self.defaults['f20_min'], self.defaults['f20_max']),
+                'b11_start': self.defaults['b11_start'],
+                'b11_end': self.defaults['b11_end'],
+                'b11_step': self.defaults['b11_step'],
+                'h11_target_range': (self.defaults['h11_min'], self.defaults['h11_max']),
                 'margin_range': (self.defaults['margin_min'], self.defaults['margin_max']),
             }
 
         return {
-            'h11_range': (h11_min, h11_max),
-            'f20_range': (f20_min, f20_max),
+            'b11_start': b11_start,
+            'b11_end': b11_end,
+            'b11_step': b11_step,
+            'h11_target_range': (h11_min, h11_max),
             'margin_range': (margin_min, margin_max),
         }
 
@@ -362,7 +375,7 @@ class TaxAdjustTab(wx.Panel):
             self.display_combined_result(result)
 
     def adjust_inventory_margin(self, event=None):
-        """处理"调整库存毛利率"按钮点击"""
+        """处理"调整库存毛利率"按钮点击 - 扫描加工费对照表"""
         if not self._ensure_file_selected():
             return
 
@@ -384,9 +397,11 @@ class TaxAdjustTab(wx.Panel):
 
         def do_calculate():
             try:
-                result = self.adjuster.calculate_inventory_margin_adjustment(
-                    h11_range=params['h11_range'],
-                    f20_range=params['f20_range'],
+                result = self.adjuster.scan_b11_margin_table(
+                    b11_start=params['b11_start'],
+                    b11_end=params['b11_end'],
+                    b11_step=params['b11_step'],
+                    h11_target_range=params['h11_target_range'],
                     margin_range=params['margin_range']
                 )
                 wx.CallAfter(self._on_inventory_margin_complete, result, None)
@@ -479,7 +494,7 @@ class TaxAdjustTab(wx.Panel):
         self.Layout()
 
     def display_inventory_margin_result(self, result):
-        """显示库存毛利率调整结果（帕累托多解）"""
+        """显示库存毛利率调整结果（扫描加工费对照表）"""
         if 'error' in result:
             self.suggest_box.Show()
             self.verify_box.Hide()
@@ -491,9 +506,10 @@ class TaxAdjustTab(wx.Panel):
             self.Layout()
             return
 
-        solutions = result.get('solutions', [])
+        table = result.get('table', [])
+        stats = result.get('stats', {})
 
-        if not solutions:
+        if not table:
             self.suggest_box.Show()
             self.verify_box.Hide()
             self.status_box.Hide()
@@ -507,79 +523,83 @@ class TaxAdjustTab(wx.Panel):
         # 显示卡片
         self.suggest_box.Show()
         self.verify_box.Show()
-        self.status_box.Hide()  # 帕累托模式不显示状态卡片
+        self.status_box.Show()
 
-        # === 建议调整卡片（显示推荐方案）===
+        # === 建议调整卡片（显示统计信息）===
         self._clear_grid(self.suggest_grid)
-        # 找到推荐方案（均衡推荐或第一个）
-        recommended = None
-        for sol in solutions:
-            if sol.get('label') == '均衡推荐':
-                recommended = sol
-                break
-        if recommended is None and solutions:
-            recommended = solutions[0]
-
-        if recommended:
-            self._set_cell(self.suggest_grid, 0, 0, f"推荐方案 ({recommended.get('label', '')}):", bold=True)
-            self._set_cell(self.suggest_grid, 0, 1, "")
-            self._set_cell(self.suggest_grid, 1, 0, f"  毛利率: {recommended['margin']:.5f}", color=wx.Colour(0, 100, 180))
-            self._set_cell(self.suggest_grid, 1, 1, f"  B11: {recommended['B11']:,.2f}", color=wx.Colour(0, 100, 180))
+        self._set_cell(self.suggest_grid, 0, 0, "扫描结果:", bold=True)
+        self._set_cell(self.suggest_grid, 0, 1, f"共 {stats.get('total_rows', 0)} 行")
+        self._set_cell(self.suggest_grid, 1, 0, "H11 达标:", bold=True)
+        converged = stats.get('converged_count', 0)
+        total = stats.get('total_rows', 0)
+        self._set_cell(self.suggest_grid, 1, 1, f"{converged}/{total} 行",
+                       color=wx.Colour(0, 128, 0) if converged == total else wx.Colour(200, 150, 0))
         self._auto_size_grid(self.suggest_grid)
 
-        # === 验证结果卡片（显示所有候选方案）===
+        # === 验证结果卡片（显示对照表）===
+        num_rows = len(table)
+        num_cols = 5  # B11, 毛利率, H11, F20, 状态
+
         # 重新调整 Grid 大小
-        num_solutions = len(solutions)
-        if self.verify_grid.GetNumberRows() < num_solutions + 1:
-            self.verify_grid.AppendRows(num_solutions + 1 - self.verify_grid.GetNumberRows())
-        if self.verify_grid.GetNumberCols() < 6:
-            self.verify_grid.AppendCols(6 - self.verify_grid.GetNumberCols())
+        current_rows = self.verify_grid.GetNumberRows()
+        current_cols = self.verify_grid.GetNumberCols()
+
+        if current_rows < num_rows + 1:
+            self.verify_grid.AppendRows(num_rows + 1 - current_rows)
+        elif current_rows > num_rows + 1:
+            self.verify_grid.DeleteRows(num_rows + 1, current_rows - num_rows - 1)
+
+        if current_cols < num_cols:
+            self.verify_grid.AppendCols(num_cols - current_cols)
+        elif current_cols > num_cols:
+            self.verify_grid.DeleteCols(num_cols, current_cols - num_cols)
 
         self._clear_grid(self.verify_grid)
 
         # 表头
-        headers = ["方案", "毛利率", "B11", "H11", "F20", "状态"]
+        headers = ["加工费(B11)", "毛利率", "H11", "F20", "状态"]
         for col, header in enumerate(headers):
             self._set_cell(self.verify_grid, 0, col, header, bold=True)
 
-        # 填充每个方案
-        for row, sol in enumerate(solutions, start=1):
-            label = sol.get('label', f'方案{row}')
-            h11_ok = sol.get('h11_ok', False)
-            f20_ok = sol.get('f20_ok', False)
+        # 填充每行数据
+        h11_range = stats.get('h11_range', (-10, 10))
+        h11_min, h11_max = h11_range
 
-            # 方案标签
-            label_color = wx.Colour(0, 100, 180) if label == '均衡推荐' else None
-            self._set_cell(self.verify_grid, row, 0, label, bold=(label == '均衡推荐'), color=label_color)
+        for row, item in enumerate(table, start=1):
+            b11 = item.get('B11', 0)
+            margin = item.get('margin', 0)
+            h11 = item.get('H11', 0)
+            f20 = item.get('F20', 0)
+            converged = item.get('converged', False)
+
+            # B11（加工费）
+            self._set_cell(self.verify_grid, row, 0, f"{b11:,}", align_right=True)
 
             # 毛利率
-            self._set_cell(self.verify_grid, row, 1, f"{sol['margin']:.5f}", align_right=True)
-
-            # B11
-            self._set_cell(self.verify_grid, row, 2, f"{sol['B11']:,.0f}", align_right=True)
+            self._set_cell(self.verify_grid, row, 1, f"{margin:.4f}", align_right=True)
 
             # H11
+            h11_ok = h11_min <= h11 <= h11_max
             h11_color = wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0)
-            self._set_cell(self.verify_grid, row, 3, f"{sol['H11']:,.2f}", color=h11_color, align_right=True)
+            self._set_cell(self.verify_grid, row, 2, f"{h11:.2f}", color=h11_color, align_right=True)
 
             # F20
-            f20_color = wx.Colour(0, 128, 0) if f20_ok else wx.Colour(200, 0, 0)
-            self._set_cell(self.verify_grid, row, 4, f"{sol['F20']:,.0f}", color=f20_color, align_right=True)
+            self._set_cell(self.verify_grid, row, 3, f"{f20:,.0f}", align_right=True)
 
             # 状态
-            if h11_ok and f20_ok:
-                status = "✓ 全部达标"
-                status_color = wx.Colour(0, 128, 0)
-            elif h11_ok:
-                status = "H11达标"
-                status_color = wx.Colour(200, 150, 0)
-            elif f20_ok:
-                status = "F20达标"
-                status_color = wx.Colour(200, 150, 0)
-            else:
-                status = "均未达标"
-                status_color = wx.Colour(200, 0, 0)
-            self._set_cell(self.verify_grid, row, 5, status, color=status_color)
+            status = "✓" if converged else "×"
+            status_color = wx.Colour(0, 128, 0) if converged else wx.Colour(200, 0, 0)
+            self._set_cell(self.verify_grid, row, 4, status, color=status_color)
 
         self._auto_size_grid(self.verify_grid)
+
+        # === 状态卡片 ===
+        self._clear_grid(self.status_grid)
+        self._set_cell(self.status_grid, 0, 0, "H11范围:", bold=True)
+        self._set_cell(self.status_grid, 0, 1, f"{h11_min} ~ {h11_max}")
+        margin_range = stats.get('margin_range', (0.70, 0.90))
+        self._set_cell(self.status_grid, 0, 2, "毛利率范围:", bold=True)
+        self._set_cell(self.status_grid, 0, 3, f"{margin_range[0]:.2f} ~ {margin_range[1]:.2f}")
+        self._auto_size_grid(self.status_grid)
+
         self.Layout()

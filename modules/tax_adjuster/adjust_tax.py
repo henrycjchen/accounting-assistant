@@ -241,18 +241,6 @@ class TaxAdjuster:
         solution = self._calculate(inputs)
         return self._to_number(self._get_value(solution, '测算表', 'G22'))
 
-    def _get_E31_at_G25(self, G25):
-        """设置 G25 并获取计算后的 E31 值"""
-        inputs = {self._cell_key('测算表', 'G25'): G25}
-        solution = self._calculate(inputs)
-        return self._to_number(self._get_value(solution, '测算表', 'E31'))
-
-    def _get_B47_at_G25(self, G25):
-        """设置 G25 并获取计算后的 B47 值"""
-        inputs = {self._cell_key('测算表', 'G25'): G25}
-        solution = self._calculate(inputs)
-        return self._to_number(self._get_value(solution, '测算表', 'B47'))
-
     def find_E18_for_target_G22(self, target_G22=0, tolerance=0.009):
         """
         二分法查找 E18，使 G22 接近目标值
@@ -310,71 +298,6 @@ class TaxAdjuster:
 
         final_G22 = self._get_G22_at_E18(mid)
         return mid, final_G22, abs(final_G22 - target_G22) < tolerance, None
-
-    def find_G25_for_target_E31(self, target_E31=0, tolerance=0.009):
-        """
-        二分法查找 G25，使 E31 接近目标值
-        返回 (G25, E31, B47, J12, is_in_range, boundary_info)
-        """
-        low, high = self.G25_MIN, self.G25_MAX
-
-        def get_values_at_G25(g25):
-            inputs = {self._cell_key('测算表', 'G25'): g25}
-            solution = self._calculate(inputs)
-            return (
-                self._to_number(self._get_value(solution, '测算表', 'E31')),
-                self._to_number(self._get_value(solution, '测算表', 'B47')),
-                self._to_number(self._get_value(solution, '销售成本', 'J12')),
-            )
-
-        # 先计算边界值
-        E31_at_low, B47_at_low, J12_at_low = get_values_at_G25(low)
-        E31_at_high, B47_at_high, J12_at_high = get_values_at_G25(high)
-
-        # E31 = E30 - E29, E30 = prev_profit + B47
-        # G25 增加 -> 销售成本 J12 增加 -> B47 减小 -> E30 减小 -> E31 减小
-
-        min_E31 = min(E31_at_low, E31_at_high)
-        max_E31 = max(E31_at_low, E31_at_high)
-
-        if target_E31 < min_E31:
-            final_G25 = high if E31_at_high < E31_at_low else low
-            E31, B47, J12 = get_values_at_G25(final_G25)
-            return final_G25, E31, B47, J12, False, {
-                'reason': 'target_too_low',
-                'target_E31': target_E31,
-                'min_E31': min_E31,
-                'boundary_G25': final_G25,
-            }
-        if target_E31 > max_E31:
-            final_G25 = low if E31_at_low > E31_at_high else high
-            E31, B47, J12 = get_values_at_G25(final_G25)
-            return final_G25, E31, B47, J12, False, {
-                'reason': 'target_too_high',
-                'target_E31': target_E31,
-                'max_E31': max_E31,
-                'boundary_G25': final_G25,
-            }
-
-        # 二分法查找
-        mid = (low + high) / 2
-        for _ in range(50):
-            if high - low < 1e-9:
-                break
-            mid = (low + high) / 2
-            E31, B47, J12 = get_values_at_G25(mid)
-
-            if abs(E31 - target_E31) < tolerance:
-                return mid, E31, B47, J12, True, None
-
-            # E31 随 G25 增加而减小
-            if E31 > target_E31:
-                low = mid
-            else:
-                high = mid
-
-        E31, B47, J12 = get_values_at_G25(mid)
-        return mid, E31, B47, J12, abs(E31 - target_E31) < tolerance, None
 
     def calculate_combined_adjustment(self):
         """
@@ -559,192 +482,6 @@ class TaxAdjuster:
 
         finally:
             self._unload_model()
-
-    def find_optimal_margin_fast(self, target_H11=0, target_F20=0, h11_tolerance=1.0, f20_tolerance=100):
-        """
-        快速搜索最优毛利率和B11（多目标帕累托优化）
-
-        算法原理：
-        1. F20 对 B11 是完美线性的（实验验证差分恒定）
-        2. 沿着帕累托前沿搜索，找到最接近目标的平衡点
-        3. 使用加权目标函数: error = w1*|H11| + w2*|F20|
-
-        Args:
-            target_H11: H11 目标值，默认 0
-            target_F20: F20 目标值，默认 0
-            h11_tolerance: H11 容差，默认 1.0
-            f20_tolerance: F20 容差，默认 100
-
-        Returns:
-            dict: 包含 margin, B11, H11, F20, converged, iterations
-        """
-        calc_count = 0
-        cache = {}
-
-        def get_values(margin, b11):
-            """获取 H11 和 F20 值（带缓存）"""
-            nonlocal calc_count
-            cache_key = (round(margin, 5), round(b11, 0))
-            if cache_key in cache:
-                return cache[cache_key]
-
-            calc_count += 1
-            inputs = {
-                self._cell_key(self.MARGIN_SHEET, self.MARGIN_CELL): margin,
-                self._cell_key('产品成本', 'B11'): b11,
-            }
-            solution = self._calculate(inputs)
-            h11 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'H11'))
-            f20 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'F20'))
-            cache[cache_key] = (h11, f20)
-            return h11, f20
-
-        def find_b11_for_target_f20(margin, target_f20):
-            """
-            对于给定的 margin，找到使 F20=target_f20 的 B11
-            利用 F20 对 B11 的线性特性
-            """
-            b11_1, b11_2 = 0, 200000
-            _, f20_1 = get_values(margin, b11_1)
-            _, f20_2 = get_values(margin, b11_2)
-
-            slope = (f20_2 - f20_1) / (b11_2 - b11_1)
-
-            if abs(slope) < 1e-10:
-                return b11_1, slope
-
-            target_b11 = b11_1 + (target_f20 - f20_1) / slope
-            target_b11 = max(self.B11_MIN, min(self.B11_MAX, target_b11))
-
-            return target_b11, slope
-
-        def weighted_error(h11, f20, h11_weight=100.0, f20_weight=1.0):
-            """计算加权误差（H11 优先，因为 H11 容差 ±10 比 F20 容差 ±40000 更严格）"""
-            # H11 安全范围 ±10，F20 安全范围 ±40000
-            h11_norm = abs(h11 - target_H11) / 10.0  # 归一化到容差
-            f20_norm = abs(f20 - target_F20) / 40000.0  # 归一化到容差
-            return h11_weight * h11_norm + f20_weight * f20_norm
-
-        # 步骤1: 粗略扫描，确定搜索方向和最佳区域
-        self._report_progress(20, "粗略扫描搜索空间...")
-        # 更密集的网格，确保覆盖更多可能的最优区域
-        margin_samples = [0.70, 0.72, 0.74, 0.76, 0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90]
-        b11_samples = [0, 50000, 100000, 150000, 200000, 250000, 300000, 350000, 400000, 450000, 500000]
-
-        best_result = None
-        best_error = float('inf')
-        all_samples = []  # 记录所有采样点，用于后续分析
-
-        for margin in margin_samples:
-            for b11 in b11_samples:
-                h11, f20 = get_values(margin, b11)
-                error = weighted_error(h11, f20)
-                all_samples.append({
-                    'margin': margin, 'B11': b11, 'H11': h11, 'F20': f20, 'error': error
-                })
-
-                if error < best_error:
-                    best_error = error
-                    best_result = {
-                        'margin': margin,
-                        'B11': b11,
-                        'H11': h11,
-                        'F20': f20,
-                    }
-
-        # 步骤2: 在最佳区域附近精细搜索
-        self._report_progress(50, "精细搜索最优解...")
-        if best_result:
-            center_margin = best_result['margin']
-            center_b11 = best_result['B11']
-
-            # 精细网格
-            margin_range = [center_margin + d * 0.01 for d in range(-5, 6)]
-            margin_range = [m for m in margin_range if self.MARGIN_MIN <= m <= self.MARGIN_MAX]
-
-            b11_range = [center_b11 + d * 20000 for d in range(-5, 6)]
-            b11_range = [b for b in b11_range if self.B11_MIN <= b <= self.B11_MAX]
-
-            for margin in margin_range:
-                for b11 in b11_range:
-                    h11, f20 = get_values(margin, b11)
-                    error = weighted_error(h11, f20)
-
-                    if error < best_error:
-                        best_error = error
-                        best_result = {
-                            'margin': margin,
-                            'B11': b11,
-                            'H11': h11,
-                            'F20': f20,
-                        }
-
-        # 步骤3: 梯度下降微调
-        self._report_progress(70, "梯度下降微调...")
-        if best_result:
-            margin = best_result['margin']
-            b11 = best_result['B11']
-
-            for iteration in range(20):
-                # 计算数值梯度
-                delta_m = 0.001
-                delta_b = 1000
-
-                h11_0, f20_0 = get_values(margin, b11)
-                error_0 = weighted_error(h11_0, f20_0)
-
-                # margin 方向梯度
-                if margin + delta_m <= self.MARGIN_MAX:
-                    h11_m, f20_m = get_values(margin + delta_m, b11)
-                    grad_m = (weighted_error(h11_m, f20_m) - error_0) / delta_m
-                else:
-                    grad_m = 0
-
-                # B11 方向梯度
-                if b11 + delta_b <= self.B11_MAX:
-                    h11_b, f20_b = get_values(margin, b11 + delta_b)
-                    grad_b = (weighted_error(h11_b, f20_b) - error_0) / delta_b
-                else:
-                    grad_b = 0
-
-                # 梯度下降步进
-                step_m = 0.005
-                step_b = 10000
-
-                new_margin = margin - step_m * (1 if grad_m > 0 else -1 if grad_m < 0 else 0)
-                new_b11 = b11 - step_b * (1 if grad_b > 0 else -1 if grad_b < 0 else 0)
-
-                new_margin = max(self.MARGIN_MIN, min(self.MARGIN_MAX, new_margin))
-                new_b11 = max(self.B11_MIN, min(self.B11_MAX, new_b11))
-
-                h11_new, f20_new = get_values(new_margin, new_b11)
-                error_new = weighted_error(h11_new, f20_new)
-
-                if error_new < best_error:
-                    best_error = error_new
-                    margin = new_margin
-                    b11 = new_b11
-                    best_result = {
-                        'margin': margin,
-                        'B11': b11,
-                        'H11': h11_new,
-                        'F20': f20_new,
-                    }
-                else:
-                    # 收敛
-                    break
-
-        # 判断是否收敛
-        h11_ok = abs(best_result['H11'] - target_H11) < h11_tolerance
-        f20_ok = abs(best_result['F20'] - target_F20) < f20_tolerance
-        converged = h11_ok and f20_ok
-
-        best_result['converged'] = converged
-        best_result['iterations'] = calc_count
-        best_result['h11_converged'] = h11_ok
-        best_result['f20_converged'] = f20_ok
-
-        return best_result
 
     def find_optimal_margin_v2(self, h11_range, f20_range, margin_range):
         """
@@ -1042,7 +779,7 @@ class TaxAdjuster:
         - 平衡方案
 
         Args:
-            optimal_result: find_optimal_margin_fast 的返回结果
+            optimal_result: find_optimal_margin_v4 的返回结果
             target_H11: H11 目标值
             target_F20: F20 目标值
             num_alternatives: 备选方案数量
@@ -1277,20 +1014,6 @@ class TaxAdjuster:
             }
         finally:
             self._unload_model()
-
-    def _save_to_file(self, values):
-        """用 openpyxl 保存值到文件
-
-        Args:
-            values: dict of {sheet_name: {cell: value}}
-        """
-        wb = openpyxl.load_workbook(self.temp_file_path)
-        for sheet_name, cells in values.items():
-            ws = wb[sheet_name]
-            for cell, value in cells.items():
-                ws[cell] = value
-        wb.save(self.temp_file_path)
-        wb.close()
 
     def scan_b11_margin_table(
         self,

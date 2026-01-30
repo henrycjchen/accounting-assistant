@@ -38,7 +38,7 @@ class MarginParamsDialog(wx.Dialog):
         # 默认值
         self.defaults = {
             'b11_start': 20000,
-            'b11_end': 400000,
+            'b11_end': 300000,
             'b11_step': 20000,
             'h11_min': TaxAdjuster.H11_MIN,
             'h11_max': TaxAdjuster.H11_MAX,
@@ -198,13 +198,21 @@ class TaxAdjustTab(wx.Panel):
         progress_sizer.Add(self.progress_gauge, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
 
         self.progress_label = wx.StaticText(self, label="")
-        progress_sizer.Add(self.progress_label, 1, wx.ALIGN_CENTER_VERTICAL)
+        progress_sizer.Add(self.progress_label, 1, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+
+        self.stop_btn = wx.Button(self, label="停止")
+        self.stop_btn.Bind(wx.EVT_BUTTON, self._on_stop_clicked)
+        progress_sizer.Add(self.stop_btn, 0, wx.ALIGN_CENTER_VERTICAL)
 
         main_sizer.Add(progress_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        # 初始隐藏进度条
+        # 初始隐藏进度条和停止按钮
         self.progress_gauge.Hide()
         self.progress_label.Hide()
+        self.stop_btn.Hide()
+
+        # 停止标志
+        self._stop_requested = False
 
         # === 结果显示区域 ===
         result_panel = wx.Panel(self)
@@ -324,22 +332,37 @@ class TaxAdjustTab(wx.Panel):
 
     def _show_progress(self):
         """显示进度条"""
+        self._stop_requested = False
         self.progress_gauge.SetValue(0)
         self.progress_label.SetLabel("准备中...")
         self.progress_gauge.Show()
         self.progress_label.Show()
+        self.stop_btn.Show()
+        self.stop_btn.Enable(True)  # 确保停止按钮可用
         self.Layout()
 
     def _hide_progress(self):
         """隐藏进度条"""
         self.progress_gauge.Hide()
         self.progress_label.Hide()
+        self.stop_btn.Hide()
+        self.stop_btn.Enable(True)  # 重置停止按钮状态
         self.Layout()
 
+    def _on_stop_clicked(self, event):
+        """停止按钮点击"""
+        self._stop_requested = True
+        self.stop_btn.Enable(False)
+        self.progress_label.SetLabel("正在停止...")
+
+    def _check_stop(self):
+        """检查是否请求停止（供搜索算法调用）"""
+        return self._stop_requested
+
     def _set_buttons_enabled(self, enabled):
-        """启用/禁用按钮"""
+        """启用/禁用按钮（停止按钮除外）"""
         for child in self.GetChildren():
-            if isinstance(child, wx.Button):
+            if isinstance(child, wx.Button) and child != self.stop_btn:
                 child.Enable(enabled)
 
     def adjust_combined(self, event=None):
@@ -374,19 +397,33 @@ class TaxAdjustTab(wx.Panel):
         else:
             self.display_combined_result(result)
 
-    def adjust_inventory_margin(self, event=None):
-        """处理"调整库存毛利率"按钮点击 - 扫描加工费对照表"""
+    def adjust_inventory_margin(self, event=None, show_dialog=False):
+        """处理"调整库存毛利率"按钮点击 - 扫描加工费对照表
+
+        Args:
+            event: 按钮事件
+            show_dialog: 是否显示参数设置对话框，默认 False 直接使用默认参数
+        """
         if not self._ensure_file_selected():
             return
 
-        # 弹出参数设置对话框
-        dialog = MarginParamsDialog(self)
-        if dialog.ShowModal() != wx.ID_OK:
+        # 使用默认参数或弹出对话框
+        if show_dialog:
+            dialog = MarginParamsDialog(self)
+            if dialog.ShowModal() != wx.ID_OK:
+                dialog.Destroy()
+                return
+            params = dialog.get_params()
             dialog.Destroy()
-            return
-
-        params = dialog.get_params()
-        dialog.Destroy()
+        else:
+            # 直接使用默认参数
+            params = {
+                'b11_start': 20000,
+                'b11_end': 300000,
+                'b11_step': 20000,
+                'h11_target_range': (TaxAdjuster.H11_MIN, TaxAdjuster.H11_MAX),
+                'margin_range': (TaxAdjuster.MARGIN_MIN, TaxAdjuster.MARGIN_MAX),
+            }
 
         if not self._load_adjuster():
             return
@@ -395,6 +432,15 @@ class TaxAdjustTab(wx.Panel):
         self._show_progress()
         self._set_buttons_enabled(False)
 
+        # 初始化 Grid（边查询边输出）
+        self._row_count = 0
+        self._h11_range = params['h11_target_range']
+        wx.CallAfter(self._init_inventory_margin_grid)
+
+        def on_row(row_data):
+            """每计算完一行，实时更新到界面"""
+            wx.CallAfter(self._append_inventory_margin_row, row_data)
+
         def do_calculate():
             try:
                 result = self.adjuster.scan_b11_margin_table(
@@ -402,7 +448,9 @@ class TaxAdjustTab(wx.Panel):
                     b11_end=params['b11_end'],
                     b11_step=params['b11_step'],
                     h11_target_range=params['h11_target_range'],
-                    margin_range=params['margin_range']
+                    margin_range=params['margin_range'],
+                    row_callback=on_row,
+                    stop_check=self._check_stop
                 )
                 wx.CallAfter(self._on_inventory_margin_complete, result, None)
             except Exception as e:
@@ -411,6 +459,70 @@ class TaxAdjustTab(wx.Panel):
         thread = threading.Thread(target=do_calculate, daemon=True)
         thread.start()
 
+    def _init_inventory_margin_grid(self):
+        """初始化库存毛利率结果 Grid（边查询边输出）"""
+        self.suggest_box.Hide()
+        self.verify_box.Show()
+        self.status_box.Hide()
+
+        # 初始化对照表
+        self._clear_grid(self.verify_grid)
+        # 确保有足够的列
+        current_cols = self.verify_grid.GetNumberCols()
+        if current_cols < 5:
+            self.verify_grid.AppendCols(5 - current_cols)
+
+        # 设置表头
+        headers = ["加工费(B11)", "毛利率", "H11", "F20", "状态"]
+        for col, header in enumerate(headers):
+            self._set_cell(self.verify_grid, 0, col, header, bold=True)
+
+        self._auto_size_grid(self.verify_grid)
+        self.Layout()
+
+    def _append_inventory_margin_row(self, row_data):
+        """追加一行库存毛利率结果（边查询边输出）"""
+        self._row_count += 1
+        row = self._row_count
+
+        # 确保 Grid 有足够的行
+        current_rows = self.verify_grid.GetNumberRows()
+        if current_rows <= row:
+            self.verify_grid.AppendRows(row - current_rows + 1)
+
+        b11 = row_data.get('B11', 0)
+        margin = row_data.get('margin', 0)
+        h11 = row_data.get('H11', 0)
+        f20 = row_data.get('F20', 0)
+        converged = row_data.get('converged', False)
+
+        h11_min, h11_max = self._h11_range
+
+        # B11（加工费）
+        self._set_cell(self.verify_grid, row, 0, f"{b11:,}", align_right=True)
+
+        # 毛利率
+        self._set_cell(self.verify_grid, row, 1, f"{margin:.4f}", align_right=True)
+
+        # H11
+        h11_ok = h11_min <= h11 <= h11_max
+        h11_color = wx.Colour(0, 128, 0) if h11_ok else wx.Colour(200, 0, 0)
+        self._set_cell(self.verify_grid, row, 2, f"{h11:.2f}", color=h11_color, align_right=True)
+
+        # F20
+        self._set_cell(self.verify_grid, row, 3, f"{f20:,.0f}", align_right=True)
+
+        # 状态
+        status = "✓" if converged else "×"
+        status_color = wx.Colour(0, 128, 0) if converged else wx.Colour(200, 0, 0)
+        self._set_cell(self.verify_grid, row, 4, status, color=status_color)
+
+        # 更新统计
+        self._set_cell(self.suggest_grid, 0, 1, f"已计算 {self._row_count} 行")
+
+        self._auto_size_grid(self.verify_grid)
+        self.Layout()
+
     def _on_inventory_margin_complete(self, result, error):
         """处理计算完成（在主线程中）"""
         self._hide_progress()
@@ -418,8 +530,38 @@ class TaxAdjustTab(wx.Panel):
 
         if error:
             wx.MessageBox(f"计算失败: {error}", "错误", wx.OK | wx.ICON_ERROR)
+        elif 'error' in result:
+            # 显示错误信息
+            self._clear_grid(self.suggest_grid)
+            self._set_cell(self.suggest_grid, 0, 0, "错误:", bold=True, color=wx.Colour(200, 0, 0))
+            self._set_cell(self.suggest_grid, 0, 1, result['error'], color=wx.Colour(200, 0, 0))
+            self._auto_size_grid(self.suggest_grid)
+            self.Layout()
         else:
-            self.display_inventory_margin_result(result)
+            # 更新最终统计信息（数据已经边查询边输出了）
+            self._finalize_inventory_margin_result(result)
+
+    def _finalize_inventory_margin_result(self, result):
+        """完成库存毛利率结果显示（更新统计信息）"""
+        stats = result.get('stats', {})
+        stopped_early = stats.get('stopped_early', False)
+        user_stopped = stats.get('user_stopped', False)
+
+        # 隐藏建议调整卡片
+        self.suggest_box.Hide()
+
+        # 显示状态卡片
+        self.status_box.Show()
+        self._clear_grid(self.status_grid)
+        h11_range = stats.get('h11_range', (-10, 10))
+        self._set_cell(self.status_grid, 0, 0, "H11范围:", bold=True)
+        self._set_cell(self.status_grid, 0, 1, f"{h11_range[0]} ~ {h11_range[1]}")
+        margin_range = stats.get('margin_range', (0.70, 0.90))
+        self._set_cell(self.status_grid, 0, 2, "毛利率范围:", bold=True)
+        self._set_cell(self.status_grid, 0, 3, f"{margin_range[0]:.2f} ~ {margin_range[1]:.2f}")
+        self._auto_size_grid(self.status_grid)
+
+        self.Layout()
 
     def _clear_grid(self, grid):
         """清空 Grid 内容"""

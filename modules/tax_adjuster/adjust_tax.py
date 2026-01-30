@@ -31,6 +31,10 @@ class TaxAdjuster:
     B11_MIN = 0
     B11_MAX = 500_000
 
+    # B11 有效搜索范围（加工费）
+    B11_VALID_MIN = 20_000
+    B11_VALID_MAX = 300_000
+
     # F20 安全范围（生产成本月结表）
     F20_MIN = -40_000
     F20_MAX = 40_000
@@ -1106,26 +1110,25 @@ class TaxAdjuster:
         f20_range=None,
         margin_range=None,
         max_solutions=5,
-        use_v3=True
+        algorithm='v4'
     ):
         """
-        计算库存毛利率调整方案（优化版：利用函数拟合快速搜索）
+        计算库存毛利率调整方案（优化版：H11 优先 + 高效二分法）
         目标: 使 H11 和 F20 落在指定范围内
         工作表: 生产成本月结表、产品成本
         调整变量: 毛利率 (J14单元格), B11 (产品成本中的加工费)
 
-        优化原理 (v3 拟合法)：
-        - F20 对 B11 是完美线性关系 (2 点确定)
-        - H11 对 margin 近似二次关系 (3 点拟合)
-        - 通过求解多项式方程直接得到最优解
-        - 总计算量从 v2 的 ~75 次降低到 ~10-15 次
+        算法选项：
+        - v4 (默认): H11 优先 + 二分法，~15-20 次计算
+        - v3: 函数拟合法，~10-15 次计算
+        - v2: 纯二分法，~75 次计算
 
         Args:
             h11_range: (min, max) H11 目标范围，默认 (-10, 10)
             f20_range: (min, max) F20 目标范围，默认 (-40000, 40000)
             margin_range: (min, max) 毛利率搜索范围，默认 (0.70, 0.90)
             max_solutions: 最多返回的候选方案数量，默认 5
-            use_v3: 使用 v3 拟合算法 (更快)，False 则使用 v2 二分法
+            algorithm: 搜索算法版本，'v4' (H11优先), 'v3' (拟合法), 'v2' (二分法)
 
         Returns:
             dict: 包含 current（当前值）、solutions（方案列表）、stats（搜索统计）
@@ -1166,9 +1169,35 @@ class TaxAdjuster:
                 'label': '当前值'
             }
 
+            # 检查是否需要跳过搜索：毛利率低于 0.7 且 B11 不在有效范围内
+            b11_in_valid_range = self.B11_VALID_MIN <= current_B11 <= self.B11_VALID_MAX
+            if current_margin < 0.7 and not b11_in_valid_range:
+                self._report_progress(100, "跳过搜索（毛利率过低且加工费不在有效范围）")
+                return {
+                    'current': {
+                        'margin': current_margin,
+                        'H11': current_H11,
+                        'F20': current_F20,
+                        'B11': current_B11,
+                    },
+                    'solutions': [current_solution],
+                    'stats': {
+                        'iterations': 0,
+                        'converged': False,
+                        'skipped': True,
+                        'skip_reason': f'毛利率 ({current_margin:.4f}) 低于 0.7 且加工费 ({current_B11:,.0f}) 不在有效范围 ({self.B11_VALID_MIN:,}-{self.B11_VALID_MAX:,})',
+                    },
+                }
+
             # 使用优化的快速搜索算法
             self._report_progress(15, "正在快速搜索最优解...")
-            if use_v3:
+            if algorithm == 'v4':
+                optimal_result = self.find_optimal_margin_v4(
+                    h11_range=h11_range,
+                    f20_range=f20_range,
+                    margin_range=margin_range
+                )
+            elif algorithm == 'v3':
                 optimal_result = self.find_optimal_margin_v3(
                     h11_range=h11_range,
                     f20_range=f20_range,
@@ -1186,12 +1215,16 @@ class TaxAdjuster:
 
             # 添加最优解
             if optimal_result.get('converged'):
-                optimal_result['label'] = '最优解 ✓'
+                # v4 算法: converged 仅表示 H11 达标
+                if optimal_result.get('f20_ok'):
+                    optimal_result['label'] = '最优解 ✓'
+                else:
+                    optimal_result['label'] = 'H11达标 ✓'
             else:
                 boundary = optimal_result.get('boundary', '')
-                if boundary == 'target_too_low':
+                if boundary == 'h11_target_too_low':
                     optimal_result['label'] = '边界解 (H11下限)'
-                elif boundary == 'target_too_high':
+                elif boundary == 'h11_target_too_high':
                     optimal_result['label'] = '边界解 (H11上限)'
                 else:
                     optimal_result['label'] = '近似解'
@@ -1262,10 +1295,12 @@ class TaxAdjuster:
     def scan_b11_margin_table(
         self,
         b11_start=20000,
-        b11_end=400000,
+        b11_end=300000,
         b11_step=20000,
         h11_target_range=(-10, 10),
-        margin_range=None
+        margin_range=None,
+        row_callback=None,
+        stop_check=None
     ):
         """
         扫描不同 B11（加工费）值下的最优毛利率，生成对照表
@@ -1275,10 +1310,13 @@ class TaxAdjuster:
 
         Args:
             b11_start: B11 起始值，默认 20000
-            b11_end: B11 结束值，默认 400000
+            b11_end: B11 结束值，默认 300000
             b11_step: B11 步进值，默认 20000
             h11_target_range: H11 目标范围 (min, max)，默认 (-10, 10)
             margin_range: 毛利率搜索范围 (min, max)，默认使用类属性
+            row_callback: 行回调函数，每计算完一行调用，签名为 callback(row_dict)
+                          用于边查询边输出
+            stop_check: 停止检查函数，返回 True 时停止搜索
 
         Returns:
             dict: {
@@ -1304,11 +1342,31 @@ class TaxAdjuster:
             if not is_valid:
                 return {'error': error_msg, 'table': [], 'stats': {}}
 
-            results = []
-            b11_values = list(range(b11_start, b11_end + 1, b11_step))
-            total_steps = len(b11_values)
+            import random
 
-            for idx, b11 in enumerate(b11_values):
+            results = []
+            # 生成步进区间，每个区间内取随机数
+            b11_ranges = []
+            current = b11_start
+            while current <= b11_end:
+                range_end = min(current + b11_step, b11_end + 1)
+                b11_ranges.append((current, range_end))
+                current += b11_step
+
+            total_steps = len(b11_ranges)
+            stopped_early = False
+            user_stopped = False
+
+            for idx, (range_start, range_end) in enumerate(b11_ranges):
+                # 检查用户是否请求停止
+                if stop_check and stop_check():
+                    user_stopped = True
+                    self._report_progress(100, "用户停止搜索")
+                    break
+
+                # 在区间内取随机数
+                b11 = random.randint(range_start, range_end - 1)
+
                 progress = int(10 + (idx / total_steps) * 85)
                 self._report_progress(progress, f"正在计算 B11={b11:,}...")
 
@@ -1319,7 +1377,18 @@ class TaxAdjuster:
                 result['B11'] = b11
                 results.append(result)
 
-            self._report_progress(100, "计算完成")
+                # 边查询边输出
+                if row_callback:
+                    row_callback(result)
+
+                # 若找不到符合 H11 范围的数据，停止搜索
+                if not result.get('converged', False):
+                    stopped_early = True
+                    self._report_progress(100, "H11 超出范围，停止搜索")
+                    break
+
+            if not stopped_early and not user_stopped:
+                self._report_progress(100, "计算完成")
 
             converged_count = sum(1 for r in results if r.get('converged', False))
 
@@ -1330,6 +1399,8 @@ class TaxAdjuster:
                     'converged_count': converged_count,
                     'h11_range': h11_target_range,
                     'margin_range': margin_range,
+                    'stopped_early': stopped_early,
+                    'user_stopped': user_stopped,
                 }
             }
 
@@ -1443,6 +1514,185 @@ class TaxAdjuster:
             'F20': best_f20,
             'converged': h11_min <= best_h11 <= h11_max
         }
+
+    def find_optimal_margin_v4(self, h11_range, f20_range, margin_range):
+        """
+        优化搜索算法 v4：H11 优先 + 高效二分法
+
+        算法原理：
+        1. H11 优先：仅确保 H11 落在目标范围内
+        2. 利用 F20-B11 线性关系：对任意 margin，只需 2 次计算确定使 F20=0 的 B11
+        3. 二分搜索 margin：找到使 H11 落在目标范围的 margin 值
+        4. F20 范围不参与搜索判断，仅记录结果
+
+        复杂度：~15-20 次计算（二分 ~10 次 × 每次 ~2 次）
+
+        Args:
+            h11_range: (min, max) H11 目标范围
+            f20_range: (min, max) F20 目标范围（仅用于结果标记，不影响搜索）
+            margin_range: (min, max) 毛利率搜索范围
+
+        Returns:
+            dict: 包含 margin, B11, H11, F20, converged, iterations, h11_ok, f20_ok
+        """
+        h11_min, h11_max = h11_range
+        f20_min, f20_max = f20_range  # 仅用于结果标记
+        margin_min, margin_max = margin_range
+        target_h11 = (h11_min + h11_max) / 2
+        target_f20 = 0  # 固定目标：使 F20 尽量接近 0
+
+        calc_count = 0
+        cache = {}
+
+        def get_values(margin, b11):
+            """获取 H11 和 F20 值（带缓存）"""
+            nonlocal calc_count
+            cache_key = (round(margin, 6), round(b11, 0))
+            if cache_key in cache:
+                return cache[cache_key]
+
+            calc_count += 1
+            inputs = {
+                self._cell_key(self.MARGIN_SHEET, self.MARGIN_CELL): margin,
+                self._cell_key('产品成本', 'B11'): b11,
+            }
+            solution = self._calculate(inputs)
+            h11 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'H11'))
+            f20 = self._to_number(self._get_value(solution, self.MARGIN_SHEET, 'F20'))
+            cache[cache_key] = (h11, f20)
+            return h11, f20
+
+        def find_b11_for_f20(margin, target_f20_val):
+            """利用线性关系计算使 F20=target 的 B11"""
+            # 采样两点确定直线: F20 = k * B11 + b
+            _, f20_0 = get_values(margin, 0)
+            _, f20_100k = get_values(margin, 100000)
+
+            k = (f20_100k - f20_0) / 100000
+            if abs(k) < 1e-10:
+                return 0, k
+
+            b11 = (target_f20_val - f20_0) / k
+            b11 = max(self.B11_MIN, min(self.B11_MAX, b11))
+            return b11, k
+
+        def get_h11_at_margin(margin):
+            """获取指定 margin 下（F20=target 时）的 H11 值"""
+            b11, _ = find_b11_for_f20(margin, target_f20)
+            h11, f20 = get_values(margin, b11)
+            return h11, f20, b11
+
+        # ========== 阶段 1: 确定 H11 随 margin 的变化方向 ==========
+        self._report_progress(20, "分析 H11-margin 关系...")
+
+        h11_at_min, f20_at_min, b11_at_min = get_h11_at_margin(margin_min)
+        h11_at_max, f20_at_max, b11_at_max = get_h11_at_margin(margin_max)
+
+        # H11 随 margin 的变化方向
+        h11_increases = h11_at_max > h11_at_min
+
+        # 检查目标是否可达
+        h11_lower = min(h11_at_min, h11_at_max)
+        h11_upper = max(h11_at_min, h11_at_max)
+
+        # ========== 阶段 2: 二分搜索使 H11 落在目标范围的 margin ==========
+        self._report_progress(40, "二分搜索最优 margin...")
+
+        best_result = None
+        best_h11_error = float('inf')
+
+        # 情况1: H11 目标范围完全在可达范围外
+        if h11_max < h11_lower:
+            # 目标过低，选择使 H11 最小的边界
+            margin = margin_max if not h11_increases else margin_min
+            b11, _ = find_b11_for_f20(margin, target_f20)
+            h11, f20 = get_values(margin, b11)
+            best_result = {
+                'margin': margin,
+                'B11': b11,
+                'H11': h11,
+                'F20': f20,
+                'boundary': 'h11_target_too_low'
+            }
+        elif h11_min > h11_upper:
+            # 目标过高，选择使 H11 最大的边界
+            margin = margin_max if h11_increases else margin_min
+            b11, _ = find_b11_for_f20(margin, target_f20)
+            h11, f20 = get_values(margin, b11)
+            best_result = {
+                'margin': margin,
+                'B11': b11,
+                'H11': h11,
+                'F20': f20,
+                'boundary': 'h11_target_too_high'
+            }
+        else:
+            # 情况2: 目标在可达范围内，二分搜索
+            low, high = margin_min, margin_max
+
+            for iteration in range(25):
+                if high - low < 1e-5:
+                    break
+
+                mid = (low + high) / 2
+                h11, f20, b11 = get_h11_at_margin(mid)
+
+                h11_error = abs(h11 - target_h11)
+
+                # 更新最优解
+                if h11_error < best_h11_error:
+                    best_h11_error = h11_error
+                    best_result = {
+                        'margin': mid,
+                        'B11': b11,
+                        'H11': h11,
+                        'F20': f20,
+                    }
+
+                # 检查 H11 是否在目标范围内
+                if h11_min <= h11 <= h11_max:
+                    # H11 已达标，搜索完成（不检查 F20 范围）
+                    self._report_progress(60, "H11 已达标")
+                    best_result['converged'] = True
+                    break
+
+                # 调整搜索范围
+                if h11_increases:
+                    if h11 < target_h11:
+                        low = mid
+                    else:
+                        high = mid
+                else:
+                    if h11 > target_h11:
+                        low = mid
+                    else:
+                        high = mid
+
+                progress = 40 + int(iteration * 2)
+                self._report_progress(progress, f"搜索中... (迭代 {iteration + 1})")
+
+        # ========== 阶段 3: 验证结果 ==========
+        self._report_progress(95, "验证结果...")
+
+        if best_result is None:
+            best_result = {
+                'margin': (margin_min + margin_max) / 2,
+                'B11': 0,
+                'H11': 0,
+                'F20': 0,
+            }
+
+        h11_ok = h11_min <= best_result['H11'] <= h11_max
+        # F20 范围仅作参考，不影响 converged 判断（H11 优先）
+        f20_ok = f20_min <= best_result['F20'] <= f20_max
+
+        # converged 仅依赖 H11 是否达标（忽略 F20 安全范围）
+        best_result['converged'] = h11_ok
+        best_result['h11_ok'] = h11_ok
+        best_result['f20_ok'] = f20_ok  # 仅供参考
+        best_result['iterations'] = calc_count
+
+        return best_result
 
     def format_b11_margin_table(self, scan_result):
         """

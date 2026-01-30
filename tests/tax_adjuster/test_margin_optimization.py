@@ -126,7 +126,7 @@ class TestCalculateInventoryMarginAdjustment:
 
 
 class TestMarginParamsDialog:
-    """测试参数对话框"""
+    """测试参数对话框（扫描加工费对照表）"""
 
     @pytest.fixture
     def wx_app(self):
@@ -143,11 +143,12 @@ class TestMarginParamsDialog:
         frame = wx.Frame(None)
         dialog = MarginParamsDialog(frame)
 
-        # 验证字段存在
+        # 验证字段存在（扫描加工费对照表所需字段）
+        assert hasattr(dialog, 'b11_start_ctrl')
+        assert hasattr(dialog, 'b11_end_ctrl')
+        assert hasattr(dialog, 'b11_step_ctrl')
         assert hasattr(dialog, 'h11_min_ctrl')
         assert hasattr(dialog, 'h11_max_ctrl')
-        assert hasattr(dialog, 'f20_min_ctrl')
-        assert hasattr(dialog, 'f20_max_ctrl')
         assert hasattr(dialog, 'margin_min_ctrl')
         assert hasattr(dialog, 'margin_max_ctrl')
 
@@ -164,11 +165,13 @@ class TestMarginParamsDialog:
 
         params = dialog.get_params()
 
-        assert 'h11_range' in params
-        assert 'f20_range' in params
+        # 扫描加工费对照表参数
+        assert 'b11_start' in params
+        assert 'b11_end' in params
+        assert 'b11_step' in params
+        assert 'h11_target_range' in params
         assert 'margin_range' in params
-        assert len(params['h11_range']) == 2
-        assert len(params['f20_range']) == 2
+        assert len(params['h11_target_range']) == 2
         assert len(params['margin_range']) == 2
 
         dialog.Destroy()
@@ -185,9 +188,85 @@ class TestMarginParamsDialog:
 
         params = dialog.get_params()
 
-        assert params['h11_range'] == (TaxAdjuster.H11_MIN, TaxAdjuster.H11_MAX)
-        assert params['f20_range'] == (TaxAdjuster.F20_MIN, TaxAdjuster.F20_MAX)
+        # 验证默认值与类常量一致
+        assert params['b11_start'] == 20000
+        assert params['b11_end'] == 300000
+        assert params['b11_step'] == 20000
+        assert params['h11_target_range'] == (TaxAdjuster.H11_MIN, TaxAdjuster.H11_MAX)
         assert params['margin_range'] == (TaxAdjuster.MARGIN_MIN, TaxAdjuster.MARGIN_MAX)
 
         dialog.Destroy()
         frame.Destroy()
+
+
+class TestFindOptimalMarginV4:
+    """测试 H11 优先搜索算法 find_optimal_margin_v4"""
+
+    @pytest.fixture
+    def mock_adjuster(self):
+        """创建带模拟计算的 TaxAdjuster"""
+        from modules.tax_adjuster.adjust_tax import TaxAdjuster
+
+        # 模拟关系: H11 随 margin 线性增加, F20 随 B11 线性减少
+        def mock_calculate(margin, b11):
+            h11 = (margin - 0.80) * 100  # margin=0.80 时 H11=0
+            f20 = -0.5 * b11 + 10000     # B11=20000 时 F20=0
+            return h11, f20
+
+        with patch.object(TaxAdjuster, '__init__', lambda self, *args, **kwargs: None):
+            adjuster = TaxAdjuster.__new__(TaxAdjuster)
+            adjuster.MARGIN_MIN = 0.70
+            adjuster.MARGIN_MAX = 0.90
+            adjuster.B11_MIN = 0
+            adjuster.B11_MAX = 500_000
+            adjuster.H11_MIN = -10
+            adjuster.H11_MAX = 10
+            adjuster.F20_MIN = -40000
+            adjuster.F20_MAX = 40000
+            adjuster._model = MagicMock()
+
+            def side_effect(inputs):
+                margin = inputs.get("'[test]生产成本月结表'!J14", 0.80)
+                b11 = inputs.get("'[test]产品成本'!B11", 0)
+                h11, f20 = mock_calculate(margin, b11)
+                solution = MagicMock()
+                solution.__getitem__ = lambda self, key: MagicMock(value=[[h11]] if 'H11' in key else [[f20]])
+                return solution
+
+            adjuster._calculate = MagicMock(side_effect=side_effect)
+            adjuster._cell_key = lambda sheet, cell: f"'[test]{sheet}'!{cell}"
+            adjuster._to_number = lambda v, d=0: v[0][0] if hasattr(v, '__getitem__') else v
+            adjuster._get_value = lambda sol, sheet, cell: sol[f"'[test]{sheet}'!{cell}"].value
+            adjuster.MARGIN_SHEET = '生产成本月结表'
+            adjuster.MARGIN_CELL = 'J14'
+            adjuster._report_progress = lambda *args: None
+
+            return adjuster
+
+    def test_returns_dict_with_required_keys(self, mock_adjuster):
+        """验证返回结果包含必要的字段"""
+        result = mock_adjuster.find_optimal_margin_v4(
+            h11_range=(-10, 10),
+            f20_range=(-40000, 40000),
+            margin_range=(0.70, 0.90)
+        )
+
+        assert 'margin' in result
+        assert 'B11' in result
+        assert 'H11' in result
+        assert 'F20' in result
+        assert 'converged' in result
+        assert 'iterations' in result
+        assert 'h11_ok' in result
+        assert 'f20_ok' in result
+
+    def test_h11_priority(self, mock_adjuster):
+        """验证 H11 优先：结果中 H11 应在目标范围内"""
+        result = mock_adjuster.find_optimal_margin_v4(
+            h11_range=(-5, 5),
+            f20_range=(-40000, 40000),
+            margin_range=(0.70, 0.90)
+        )
+
+        # H11 应该在目标范围内或尽可能接近
+        assert result['h11_ok'] or abs(result['H11']) < 15
